@@ -5,6 +5,7 @@ import torch
 import argparse
 
 from data_processor import math_expressions_generation, DataProcessor
+
 ARG_PARSER = argparse.ArgumentParser()
 ARGS = None
 
@@ -52,52 +53,16 @@ def attention(keys, queries, values, mask=None, temperature=None):
 
 
 class MultiHead(nn.Module):
-    def __init__(
-        self,
-        dim_input_query,
-        dim_input_key,
-        dim_input_value,
-        dim_representation,
-        num_heads=8,
-    ):
+    def __init__(self, dim_word, num_heads=8):
         super(MultiHead, self).__init__()
-        assert dim_representation // num_heads * num_heads == dim_representation
-        self.dim_representation = dim_representation
+        assert dim_word // num_heads * num_heads == dim_word
+        self.dim_word = dim_word
         self.num_heads = num_heads
-        self.d_k = float(dim_representation)
-        # self.Q = nn.Linear(dim_input_query, dim_representation * num_heads, bias=True)
-        # self.K = nn.Linear(dim_input_key, dim_representation * num_heads, bias=True)
-        # self.V = nn.Linear(dim_input_value, dim_representation * num_heads, bias=True)
-        self.Q = nn.Linear(dim_input_query, dim_representation, bias=True)
-        self.K = nn.Linear(dim_input_key, dim_representation, bias=True)
-        self.V = nn.Linear(dim_input_value, dim_representation, bias=True)
-        # self.W_o = nn.Linear(
-        #    num_heads * dim_representation, dim_input_query, bias=False #bias=True
-        # )
-        self.W_o = nn.Linear(
-            dim_representation, dim_input_query, bias=True  # bias=True
-        )
-        # from torch.nn.modules.activation import MultiheadAttention
-        # self.multi_head = MultiheadAttention(dim_input_query, num_heads, dropout=0.)
-
-    def __init__tmp(
-        self,
-        dim_input_query,
-        dim_input_key,
-        dim_input_value,
-        dim_representation,
-        d_k=64,
-        num_heads=8,
-    ):
-        super(MultiHead, self).__init__()
-        assert dim_representation // num_heads * num_heads == dim_representation
-        from torch.nn.modules.activation import MultiheadAttention
-
-        self.multi_head = MultiheadAttention(dim_input_query, num_heads, dropout=0.0)
-
-    def forward_tmp(self, input_query, input_key, input_value, mask=None):
-        multi = self.multi_head(input_query, input_key, input_value, attn_mask=mask)[0]
-        return multi
+        self.d_k = float(dim_word)
+        self.Q = nn.Linear(dim_word, dim_word, bias=True)
+        self.K = nn.Linear(dim_word, dim_word, bias=True)
+        self.V = nn.Linear(dim_word, dim_word, bias=True)
+        self.W_o = nn.Linear(dim_word, dim_word, bias=True)  # bias=False
 
     def forward(self, input_query, input_key, input_value, mask=None):
         assert "batch" in input_query.names and "time" in input_query.names
@@ -109,6 +74,7 @@ class MultiHead(nn.Module):
             multi_head_representation = lin_layer(input).refine_names(
                 ..., "dim_times_n_head"
             )
+            # other possibility, dim_representation does not have to be divisible by
             # multi_head_representation = multi_head_representation.unflatten(
             #    "dim_times_n_head", [("head", num_heads), ("dim", dim_representation)]
             # )
@@ -122,13 +88,11 @@ class MultiHead(nn.Module):
             return multi_head_representation
 
         multi_head_q = multi_head_repr(
-            self.Q, input_query, self.num_heads, self.dim_representation
+            self.Q, input_query, self.num_heads, self.dim_word
         )
-        multi_head_k = multi_head_repr(
-            self.K, input_key, self.num_heads, self.dim_representation
-        )
+        multi_head_k = multi_head_repr(self.K, input_key, self.num_heads, self.dim_word)
         multi_head_v = multi_head_repr(
-            self.V, input_value, self.num_heads, self.dim_representation
+            self.V, input_value, self.num_heads, self.dim_word
         )
 
         assert (
@@ -155,39 +119,34 @@ class MultiHead(nn.Module):
 class NormalizationLayer(nn.Module):
     def __init__(self, dim_word):
         super(NormalizationLayer, self).__init__()
-        # self.alpha = torch.nn.Parameter(
-        #    data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
-        #    requires_grad=True,
-        # )
-        ## they perform special init with ones and zeros for w and b
-        # torch.nn.init.xavier_normal_(self.alpha)
-        # self.beta = torch.nn.Parameter(
-        #    data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
-        #    requires_grad=True,
-        # )
-        # torch.nn.init.xavier_normal_(self.beta)
-        from torch.nn.modules.normalization import LayerNorm
-
-        self.layer_norm = LayerNorm(dim_word)
+        self.alpha = torch.nn.Parameter(
+            data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
+            requires_grad=True,
+        )
+        # they perform special init with ones and zeros for w and b
+        torch.nn.init.xavier_normal_(self.alpha)
+        self.beta = torch.nn.Parameter(
+            data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
+            requires_grad=True,
+        )
+        torch.nn.init.xavier_normal_(self.beta)
 
     def forward(self, Z):
-        # mean = Z.mean("word_dim")
-        # std = Z.std("word_dim")
-        # mean = (
-        #    mean.rename(None)
-        #    .reshape(mean.shape + (1,))
-        #    .refine_names(*mean.names, "word_dim")
-        # )
-        # std = (
-        #    std.rename(None)
-        #    .reshape(std.shape + (1,))
-        #    .refine_names(*std.names, "word_dim")
-        # )
-        # assert std.names == mean.names == Z.names == ("batch", "time", "word_dim")
-        # Z = (Z - mean) / std
-        # return Z * self.alpha + self.beta
-        norm = self.layer_norm(Z.rename(None)).refine_names(*Z.names)
-        return norm
+        mean = Z.mean("word_dim")
+        std = Z.std("word_dim")
+        mean = (
+            mean.rename(None)
+            .reshape(mean.shape + (1,))
+            .refine_names(*mean.names, "word_dim")
+        )
+        std = (
+            std.rename(None)
+            .reshape(std.shape + (1,))
+            .refine_names(*std.names, "word_dim")
+        )
+        assert std.names == mean.names == Z.names == ("batch", "time", "word_dim")
+        Z = (Z - mean) / std
+        return Z * self.alpha + self.beta
 
 
 class FeedForward(nn.Module):
@@ -201,96 +160,51 @@ class FeedForward(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, dim_word, dim_representation, num_heads=8, dim_feedforward=2048):
+    def __init__(self, dim_word, num_heads=8, dim_feedforward=2048):
         super(Encoder, self).__init__()
-        self.multi_head = MultiHead(
-            dim_word, dim_word, dim_word, dim_representation, num_heads=num_heads
-        )
-        self.lin_layer = NormalizationLayer(dim_word)
+        self.multi_head = MultiHead(dim_word, num_heads=num_heads)
+        self.norm_layer = NormalizationLayer(dim_word)
         self.ffnn = FeedForward(dim_word, dim_feedforward=dim_feedforward)
-        self.lin_layer_2 = NormalizationLayer(dim_word)
+        self.norm_layer2 = NormalizationLayer(dim_word)
 
     # input is either original input or Z from previous encoder
     def forward(self, input):
-
-        # align time batch dim first
-        # Z = self.multi_head(
-        #    input_query=input.align_to("time", "batch", "word_dim").rename(None),
-        #    input_key=input.align_to("time", "batch", "word_dim").rename(None),
-        #    input_value=input.align_to("time", "batch", "word_dim").rename(None)
-        # ).refine_names("time", "batch", "word_dim").align_to("batch", "time", "word_dim")
         Z = self.multi_head(input_query=input, input_key=input, input_value=input)
-        Z = self.lin_layer((Z + input.align_as(Z)))
+        Z = self.norm_layer((Z + input.align_as(Z)))
         assert Z.names == ("batch", "time", "word_dim")
         Z_forwarded = self.ffnn(Z).refine_names(*Z.names)
-        Z_final = self.lin_layer_2((Z + Z_forwarded))
+        Z_final = self.norm_layer2((Z + Z_forwarded))
         return Z_final
 
 
 class Decoder(nn.Module):
-    def __init__(
-        self,
-        dim_word_decoder,
-        dim_word_encoder,
-        dim_representation,
-        num_heads=8,
-        dim_feedforward=2048,
-    ):
+    def __init__(self, dim_word_decoder, num_heads=8, dim_feedforward=2048):
         super(Decoder, self).__init__()
-        self.multi_head_self_att = MultiHead(
-            dim_word_decoder,
-            dim_word_decoder,
-            dim_word_decoder,
-            dim_representation,
-            num_heads=num_heads,
-        )
-        self.lin_layer = NormalizationLayer(dim_word_decoder)
-        self.multi_head_enc_dec_att = MultiHead(
-            dim_word_decoder,
-            dim_word_encoder,
-            dim_word_encoder,
-            dim_representation,
-            num_heads=num_heads,
-        )
-        self.lin_layer_2 = NormalizationLayer(dim_word_decoder)
+        self.multi_head_self_att = MultiHead(dim_word_decoder, num_heads=num_heads)
+        self.norm_layer = NormalizationLayer(dim_word_decoder)
+        self.multi_head_enc_dec_att = MultiHead(dim_word_decoder, num_heads=num_heads)
+        self.norm_layer2 = NormalizationLayer(dim_word_decoder)
         self.ffnn = FeedForward(dim_word_decoder, dim_feedforward=dim_feedforward)
-        self.lin_layer_3 = NormalizationLayer(dim_word_decoder)
+        self.norm_layer3 = NormalizationLayer(dim_word_decoder)
 
     def forward(self, input_decoder, input_seq_encodings, mask=None):
-        # change it
-        # mask = None
         z_self_att = self.multi_head_self_att(
             input_decoder.align_to("batch", "time", "word_dim"),
             input_decoder.align_to("batch", "time", "word_dim"),
             input_decoder.align_to("batch", "time", "word_dim"),
             mask=mask,
         )
-        # z_self_att = self.multi_head_self_att(
-        #    input_query=input_decoder.align_to("time", "batch", "word_dim").rename(None),
-        #    input_key=input_decoder.align_to("time", "batch", "word_dim").rename(None),
-        #    input_value=input_decoder.align_to("time", "batch", "word_dim").rename(None)
-        # ).refine_names("time", "batch", "word_dim").align_to("batch", "time", "word_dim")
-
-        z_norm1 = self.lin_layer((z_self_att + input_decoder.align_as(z_self_att)))
+        z_norm1 = self.norm_layer((z_self_att + input_decoder.align_as(z_self_att)))
 
         # Encoder Decoder attention
         z_enc_dec_att = self.multi_head_enc_dec_att(
             z_norm1, input_seq_encodings, input_seq_encodings
         )
-        # z_enc_dec_att = self.multi_head_enc_dec_att(
-        #    input_query=z_norm1.align_to("time", "batch", "word_dim").rename(None),
-        #    input_key=input_seq_encodings.align_to("time", "batch", "word_dim").rename(None),
-        #    input_value=input_seq_encodings.align_to("time", "batch", "word_dim").rename(None)
-        # ).refine_names("time", "batch", "word_dim").align_to("batch", "time", "word_dim")
-        enc_dec_focused_normalized = self.lin_layer_2(
-            # self.dec_w(z_enc_dec_att) + z_norm1
-            z_enc_dec_att
-            + z_norm1
-        )
+        enc_dec_focused_normalized = self.norm_layer2(z_enc_dec_att + z_norm1)
         Z_forwarded = self.ffnn(enc_dec_focused_normalized).refine_names(
             *enc_dec_focused_normalized.names
         )
-        Z_final = self.lin_layer_3((enc_dec_focused_normalized + Z_forwarded))
+        Z_final = self.norm_layer3((enc_dec_focused_normalized + Z_forwarded))
         return Z_final
 
 
@@ -324,12 +238,7 @@ class Transformer(nn.Module):
 
         self.encoders = nn.ModuleList(
             [
-                Encoder(
-                    dim_word,
-                    dim_word,
-                    num_heads=num_heads,
-                    dim_feedforward=dim_feedforward,
-                )
+                Encoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
                 for _ in range(num_encoders)
             ]
         )
@@ -337,13 +246,7 @@ class Transformer(nn.Module):
         self.layer_norm_encoder = NormalizationLayer(dim_word)
         self.decoders = nn.ModuleList(
             [
-                Decoder(
-                    dim_word,
-                    dim_word,
-                    dim_word,
-                    num_heads=num_heads,
-                    dim_feedforward=dim_feedforward,
-                )
+                Decoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
                 for _ in range(num_decoders)
             ]
         )
@@ -351,33 +254,9 @@ class Transformer(nn.Module):
         self.layer_norm_decoder = NormalizationLayer(dim_word)
         self.final_linear = nn.Linear(dim_word, decoder_vocabulary_size, bias=True)
         self.optimizer = torch.optim.Adam(self.parameters(), lr=ARGS.lr)
-        # put there optimizer parameters already registered
-
-        self.trans_final_linear = nn.Linear(
-            dim_word, decoder_vocabulary_size, bias=True
-        )
-        # self.transformer = nn.Transformer(
-        self.transformer = PytorchTransformer(
-            d_model=dim_word,
-            nhead=num_heads,
-            num_encoder_layers=num_encoders,
-            num_decoder_layers=num_decoders,
-            dim_feedforward=dim_feedforward,
-            dropout=0.0,
-            activation="relu",
-            custom_encoder=None,
-            custom_decoder=None,
-        )
-        self.optimizer_pytorch = torch.optim.Adam(
-            list(self.transformer.parameters())
-            + list(self.trans_final_linear.parameters()),
-            lr=ARGS.lr,
-        )
         self.criterion = nn.NLLLoss(reduction="mean")
 
-    def forward(
-        self, input_encoder, input_decoder, pytorch_transformer=True, mask_decoder=True
-    ):
+    def forward(self, input_encoder, input_decoder, mask_decoder=True):
         if mask_decoder:
             mask = torch.triu(
                 torch.ones(input_decoder.size("time"), input_decoder.size("time")),
@@ -394,62 +273,41 @@ class Transformer(nn.Module):
             input_decoder.align_to("batch", "time", "word_dim")
             + self.position_encodings_decoder[: input_decoder.size("time")]
         )
-        if not pytorch_transformer:
-            z_enc = input_encoder
-            for encoder in self.encoders:
-                z_enc = encoder(z_enc)
-            # change later
-            z_enc = self.layer_norm_encoder(z_enc)
-            output_encoder = z_enc
-            z_dec = input_decoder
-            for decoder in self.decoders:
-                z_dec = decoder(z_dec, output_encoder, mask=mask)
-            # change later
-            z_dec = self.layer_norm_decoder(z_dec)
-            final_linear = self.final_linear(z_dec).refine_names(..., "dec_vocabulary")
-        else:
-            input_encoder = input_encoder.align_to("time", "batch", "word_dim").rename(
-                None
-            )
-            input_decoder = input_decoder.align_to("time", "batch", "word_dim").rename(
-                None
-            )
-            z_dec = (
-                self.transformer(input_encoder, input_decoder, tgt_mask=mask)
-                .refine_names("time", "batch", "word_dim")
-                .align_to("batch", "time", "word_dim")
-            )
-            final_linear = self.trans_final_linear(z_dec).refine_names(
-                ..., "dec_vocabulary"
-            )
+        z_enc = input_encoder
+        for encoder in self.encoders:
+            z_enc = encoder(z_enc)
+        output_encoder = z_enc
 
-        prediction = torch.nn.functional.log_softmax(final_linear, "dec_vocabulary")
-        return prediction
+        z_dec = input_decoder
+        for decoder in self.decoders:
+            z_dec = decoder(z_dec, output_encoder, mask=mask)
+
+        return torch.nn.functional.log_softmax(
+            self.final_linear(z_dec).refine_names(..., "dec_vocabulary"),
+            "dec_vocabulary",
+        )
 
     def train_on_batch(
-        self, input_encoder, input_decoder, target, pytorch_transformer=True
+        self, input_encoder, input_decoder, target
     ):
         target = target.align_to("batch", "time", "dec_vocabulary")
         target_idx = target.rename(None).argmax(2).refine_names("batch", "time")
         # change it later
-        optimizer = self.optimizer_pytorch if pytorch_transformer else self.optimizer
-        # self.optimizer.zero_grad()
-        optimizer.zero_grad()
-        prediction = transformer(
-            input_encoder, input_decoder, pytorch_transformer=pytorch_transformer
+        self.optimizer.zero_grad()
+        prediction = self.forward(
+            input_encoder, input_decoder
         )
         loss_on_batch = self.criterion(
             prediction.flatten(["batch", "time"], "batch_time").rename(None),
             target_idx.flatten(["batch", "time"], "batch_time").rename(None),
         )
         loss_on_batch.backward()
-        # self.optimizer.step()
-        optimizer.step()
+        self.optimizer.step()
         return loss_on_batch
 
 
 def handle_arguments():
-    # debug arguments
+    # Debug arguments
     ARG_PARSER.add_argument(
         "--quick-debug", default=True, type=lambda x: str(x).lower() == "true", help=""
     )
@@ -480,10 +338,16 @@ def generate_batches(encoder_inputs, decoder_inputs, targets, batch_size):
     # so can keep on calling generator after inner loop has expired all batches
     while True:
         for batch_idx in range(nb_batch):
-            batch_idxs = samples_idxs[batch_idx * ARGS.batch_size : (batch_idx + 1) * ARGS.batch_size]
+            batch_idxs = samples_idxs[
+                batch_idx * ARGS.batch_size : (batch_idx + 1) * ARGS.batch_size
+            ]
             batch = (
-                encoder_inputs.rename(None)[batch_idxs].refine_names(*encoder_inputs.names),
-                decoder_inputs.rename(None)[batch_idxs].refine_names(*decoder_inputs.names),
+                encoder_inputs.rename(None)[batch_idxs].refine_names(
+                    *encoder_inputs.names
+                ),
+                decoder_inputs.rename(None)[batch_idxs].refine_names(
+                    *decoder_inputs.names
+                ),
                 targets.rename(None)[batch_idxs].refine_names(*targets.names),
             )
             yield batch
@@ -522,18 +386,8 @@ if __name__ == "__main__":
             data_processor.target_tr,
             ARGS.batch_size,
         ):
-            msg = ""
-            # train alternatively
-            for use_pytorch_transformer in True, False:
-                batch_loss = transformer.train_on_batch(
-                    batch_encoder_inputs,
-                    batch_decoder_inputs,
-                    batch_targets,
-                    pytorch_transformer=use_pytorch_transformer,
-                )
-                if use_pytorch_transformer:
-                    msg += f"pytorch implem loss on batch: {batch_loss}"
-                else:
-                    msg += f" personal implem loss on batch: {batch_loss}"
-                msg += f" epoch: {epoch}"
+            batch_loss = transformer.train_on_batch(
+                batch_encoder_inputs, batch_decoder_inputs, batch_targets
+            )
+            msg = f"personal implem loss on batch: {batch_loss} epoch: {epoch}"
             print(msg)

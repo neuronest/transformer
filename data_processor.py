@@ -2,6 +2,7 @@ import operator
 import numpy as np
 import torch
 
+
 def math_expressions_generation(n_samples=1000, n_digits=3, invert=True):
     X, Y = [], []
     math_operators = {
@@ -23,10 +24,9 @@ def math_expressions_generation(n_samples=1000, n_digits=3, invert=True):
         Y.append(y)
     return X, Y
 
-class DataProcessor():
-    def __init__(
-        self, X, y
-    ):
+
+class DataProcessor:
+    def __init__(self, X, y):
         self.X = X
         self.y = y
         self.GO = "="
@@ -61,28 +61,15 @@ class DataProcessor():
 
     def _construct_data_set(self):
         encoder_input = torch.zeros(
-            (
-                self.max_encoder_sequence_length,
-                self.dataset_size,
-                self.vocabulary_size
-            ),
+            (self.max_encoder_sequence_length, self.dataset_size, self.vocabulary_size),
             dtype=torch.float32,
         )
         decoder_input = torch.zeros(
-            (
-                self.max_decoder_sequence_length,
-                self.dataset_size,
-                self.vocabulary_size
-            ),
+            (self.max_decoder_sequence_length, self.dataset_size, self.vocabulary_size),
             dtype=torch.float32,
-
         )
         target = torch.zeros(
-            (
-                self.max_decoder_sequence_length,
-                self.dataset_size,
-                self.vocabulary_size
-            ),
+            (self.max_decoder_sequence_length, self.dataset_size, self.vocabulary_size),
             dtype=torch.float32,
         )
 
@@ -115,9 +102,21 @@ class DataProcessor():
             target[:, idxs_tr, :],
             target[:, idxs_val, :],
         )
-        self.encoder_input_tr = self.encoder_input_tr.refine_names('time', 'batch', 'word_dim')
-        self.encoder_input_val = self.encoder_input_val.refine_names('time', 'batch', 'word_dim')
-        self.decoder_input_tr = self.decoder_input_tr.refine_names('time', 'batch', 'word_dim')
-        self.decoder_input_val = self.decoder_input_val.refine_names('time', 'batch', 'word_dim')
-        self.target_tr = self.target_tr.refine_names('time', 'batch', 'dec_vocabulary')
-        self.target_val = self.target_val.refine_names('time', 'batch', 'dec_vocabulary')
+        self.encoder_input_tr = self.encoder_input_tr.refine_names(
+            "time", "batch", "word_dim"
+        ).align_to("batch", "time", "word_dim")
+        self.encoder_input_val = self.encoder_input_val.refine_names(
+            "time", "batch", "word_dim"
+        ).align_to("batch", "time", "word_dim")
+        self.decoder_input_tr = self.decoder_input_tr.refine_names(
+            "time", "batch", "word_dim"
+        ).align_to("batch", "time", "word_dim")
+        self.decoder_input_val = self.decoder_input_val.refine_names(
+            "time", "batch", "word_dim"
+        ).align_to("batch", "time", "word_dim")
+        self.target_tr = self.target_tr.refine_names(
+            "time", "batch", "dec_vocabulary"
+        ).align_to("batch", "time", "dec_vocabulary")
+        self.target_val = self.target_val.refine_names(
+            "time", "batch", "dec_vocabulary"
+        ).align_to("batch", "time", "dec_vocabulary")

@@ -35,4 +35,4 @@ def test_encoding_relative_positions(embedding_size=15, d_model=32, number_sampl
     X_tr, X_val, y_tr, y_val = create_dataset(number_samples,number_positions)
     model = create_model(embedding_size)
     history_callback = model.fit(X_tr, y_tr, epochs=100, validation_data=(X_val, y_val))
-    assert history_callback.history["val_loss"][-1] < 0.05
+    assert history_callback.history["val_loss"][-1] < 0.2

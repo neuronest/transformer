@@ -1,6 +1,8 @@
 import tensorflow
+import numpy as np
 
 from transformer import positional_encoding
+
 
 def test_encoding_relative_positions(embedding_size=15, d_model=32, number_samples=1000, number_positions=30):
 

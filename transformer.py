@@ -353,7 +353,36 @@ def generate_batches(encoder_inputs, decoder_inputs, targets, batch_size):
             yield batch
 
 
+# this code is for toy data generation, will be discarded later
 def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=True):
+    import operator
+
+    # raises error if put at file top as data_processor
+    # imports transformer module function
+    # not a problem since get_math_data will be discarded eventually
+    from data_processor import DataProcessor
+
+    def math_expressions_generation(n_samples=1000, n_digits=3, invert=True):
+        X, Y = [], []
+        math_operators = {
+            "+": operator.add,
+            "-": operator.sub,
+            "*": operator.mul,
+            "/": operator.truediv,
+            "%": operator.mod,
+        }
+        for i in range(n_samples):
+            a, b = np.random.randint(1, 10 ** n_digits, size=2)
+            op = np.random.choice(list(math_operators.keys()))
+            res = math_operators[op](a, b)
+            x = "".join([str(elem) for elem in (a, op, b)])
+            if invert is True:
+                x = x[::-1]
+            y = "{:.5f}".format(res) if isinstance(res, float) else str(res)
+            X.append(x)
+            Y.append(y)
+        return X, Y
+
     n_samples = big_nb_samples if big_dataset else small_nb_samples
     X, y = math_expressions_generation(n_samples=n_samples, n_digits=3, invert=True)
     data_processor = DataProcessor(X, y)

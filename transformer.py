@@ -309,7 +309,7 @@ def generate_batches(encoder_inputs, decoder_inputs, targets, batch_size):
     while True:
         for batch_idx in range(nb_batch):
             batch_idxs = samples_idxs[
-                batch_idx * ARGS.batch_size : (batch_idx + 1) * ARGS.batch_size
+                batch_idx * batch_size : (batch_idx + 1) * batch_size
             ]
             batch = (
                 encoder_inputs.rename(None)[batch_idxs].refine_names(

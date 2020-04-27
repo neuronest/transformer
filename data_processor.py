@@ -1,12 +1,14 @@
 import numpy as np
 import torch
 
+from transformer import positional_encoding
 
 
 class DataProcessor:
-    def __init__(self, X, y):
+    def __init__(self, X, y, with_positional_encodings=True):
         self.X = X
         self.y = y
+        self.with_positional_encodings = with_positional_encodings
         self.GO = "="
         self.EOS = "\n"
         self.dataset_size = None
@@ -39,25 +41,43 @@ class DataProcessor:
 
     def _construct_data_set(self):
         encoder_input = torch.zeros(
-            (self.max_encoder_sequence_length, self.dataset_size, self.vocabulary_size),
+            (self.dataset_size, self.max_encoder_sequence_length, self.vocabulary_size),
             dtype=torch.float32,
         )
         decoder_input = torch.zeros(
-            (self.max_decoder_sequence_length, self.dataset_size, self.vocabulary_size),
+            (self.dataset_size, self.max_decoder_sequence_length, self.vocabulary_size),
             dtype=torch.float32,
         )
         target = torch.zeros(
-            (self.max_decoder_sequence_length, self.dataset_size, self.vocabulary_size),
+            (self.dataset_size, self.max_decoder_sequence_length, self.vocabulary_size),
             dtype=torch.float32,
         )
 
         for i, (X_i, y_i) in enumerate(zip(self.X, self.y)):
             for t, char in enumerate(X_i):
-                encoder_input[t, i, self.char_index[char]] = 1.0
+                encoder_input[i, t, self.char_index[char]] = 1.0
             for t, char in enumerate(y_i):
-                decoder_input[t, i, self.char_index[char]] = 1.0
+                # todo: impression decoder_input has all tokens
+                # todo: from GO to EOS see if that is ok
+                decoder_input[i, t, self.char_index[char]] = 1.0
                 if t > 0:
-                    target[t - 1, i, self.char_index[char]] = 1.0
+                    target[i, t - 1, self.char_index[char]] = 1.0
+
+        encoder_input = encoder_input.refine_names("batch", "time", "word_dim")
+        decoder_input = decoder_input.refine_names("batch", "time", "word_dim")
+        target = target.refine_names("batch", "time", "dec_vocabulary")
+
+        if self.with_positional_encodings:
+            max_nb_steps = max(encoder_input.size("word_dim"), decoder_input.size("word_dim"))
+            position_encodings = torch.tensor(
+                [
+                    positional_encoding(t, encoder_input.size("word_dim"))
+                    for t in range(max_nb_steps)
+                ],
+                dtype=torch.float32,
+            ).refine_names("time", "word_dim")
+            encoder_input += position_encodings[: encoder_input.size("time")]
+            decoder_input += position_encodings[: decoder_input.size("time")]
 
         p_val = 0.25
         size_val = int(p_val * self.dataset_size)
@@ -73,28 +93,10 @@ class DataProcessor:
             self.target_tr,
             self.target_val,
         ) = (
-            encoder_input[:, idxs_tr, :],
-            encoder_input[:, idxs_val, :],
-            decoder_input[:, idxs_tr, :],
-            decoder_input[:, idxs_val, :],
-            target[:, idxs_tr, :],
-            target[:, idxs_val, :],
+            encoder_input.rename(None)[idxs_tr].refine_names(*encoder_input.names),
+            encoder_input.rename(None)[idxs_val].refine_names(*encoder_input.names),
+            decoder_input.rename(None)[idxs_tr].refine_names(*decoder_input.names),
+            decoder_input.rename(None)[idxs_val].refine_names(*decoder_input.names),
+            target.rename(None)[idxs_tr].refine_names(*target.names),
+            target.rename(None)[idxs_val].refine_names(*target.names),
         )
-        self.encoder_input_tr = self.encoder_input_tr.refine_names(
-            "time", "batch", "word_dim"
-        ).align_to("batch", "time", "word_dim")
-        self.encoder_input_val = self.encoder_input_val.refine_names(
-            "time", "batch", "word_dim"
-        ).align_to("batch", "time", "word_dim")
-        self.decoder_input_tr = self.decoder_input_tr.refine_names(
-            "time", "batch", "word_dim"
-        ).align_to("batch", "time", "word_dim")
-        self.decoder_input_val = self.decoder_input_val.refine_names(
-            "time", "batch", "word_dim"
-        ).align_to("batch", "time", "word_dim")
-        self.target_tr = self.target_tr.refine_names(
-            "time", "batch", "dec_vocabulary"
-        ).align_to("batch", "time", "dec_vocabulary")
-        self.target_val = self.target_val.refine_names(
-            "time", "batch", "dec_vocabulary"
-        ).align_to("batch", "time", "dec_vocabulary")

@@ -1,28 +1,6 @@
-import operator
 import numpy as np
 import torch
 
-
-def math_expressions_generation(n_samples=1000, n_digits=3, invert=True):
-    X, Y = [], []
-    math_operators = {
-        "+": operator.add,
-        "-": operator.sub,
-        "*": operator.mul,
-        "/": operator.truediv,
-        "%": operator.mod,
-    }
-    for i in range(n_samples):
-        a, b = np.random.randint(1, 10 ** n_digits, size=2)
-        op = np.random.choice(list(math_operators.keys()))
-        res = math_operators[op](a, b)
-        x = "".join([str(elem) for elem in (a, op, b)])
-        if invert is True:
-            x = x[::-1]
-        y = "{:.5f}".format(res) if isinstance(res, float) else str(res)
-        X.append(x)
-        Y.append(y)
-    return X, Y
 
 
 class DataProcessor:

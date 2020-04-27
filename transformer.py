@@ -66,25 +66,25 @@ class MultiHead(nn.Module):
         self.Q = nn.Linear(dim_word, dim_word, bias=True)
         self.K = nn.Linear(dim_word, dim_word, bias=True)
         self.V = nn.Linear(dim_word, dim_word, bias=True)
-        self.W_o = nn.Linear(dim_word, dim_word, bias=True)  # bias=False
+        self.linear_out = nn.Linear(dim_word, dim_word, bias=True)  # bias=False
 
     def forward(self, input_query, input_key, input_value, mask=None):
         assert "batch" in input_query.names and "time" in input_query.names
         assert "batch" in input_key.names and "time" in input_key.names
         assert "batch" in input_value.names and "time" in input_value.names
 
-        def multi_head_repr(lin_layer, input, num_heads, dim_representation):
+        def multi_head_repr(linear_layer, input, num_heads, dim_all_heads):
 
-            multi_head_representation = lin_layer(input).refine_names(
-                ..., "dim_times_n_head"
+            multi_head_representation = linear_layer(input).refine_names(
+                ..., "dim_all_heads"
             )
             # other possibility, dim_representation does not have to be divisible by
             # multi_head_representation = multi_head_representation.unflatten(
             #    "dim_times_n_head", [("head", num_heads), ("dim", dim_representation)]
             # )
             multi_head_representation = multi_head_representation.unflatten(
-                "dim_times_n_head",
-                [("head", num_heads), ("dim", dim_representation // num_heads)],
+                "dim_all_heads",
+                [("head", num_heads), ("dim", dim_all_heads // num_heads)],
             )
             multi_head_representation = multi_head_representation.align_to(
                 "head", "batch", "time", "dim"
@@ -116,7 +116,7 @@ class MultiHead(nn.Module):
         Z = Z.align_to("batch", "time", "head", "dim").flatten(
             ["head", "dim"], "dim_all_heads"
         )
-        Z = self.W_o(Z).refine_names("batch", "time", "word_dim")
+        Z = self.linear_out(Z).refine_names("batch", "time", "word_dim")
         return Z
 
 

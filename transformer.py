@@ -1,13 +1,17 @@
 import numpy as np
 import torch.nn as nn
-from torch.nn.modules.transformer import Transformer as PytorchTransformer
 import torch
 import argparse
 
-from data_processor import math_expressions_generation, DataProcessor
-
 ARG_PARSER = argparse.ArgumentParser()
 ARGS = None
+
+
+def decoder_triangular_training_mask(nb_timesteps):
+    mask = torch.triu(torch.ones(nb_timesteps, nb_timesteps), diagonal=1).type(
+        torch.bool
+    )
+    return mask
 
 
 def positional_encoding(position, encoding_dim):
@@ -216,26 +220,9 @@ class Transformer(nn.Module):
         num_heads=8,
         num_encoders=6,
         num_decoders=6,
-        max_seq_Length=1000,
         dim_feedforward=2048,
     ):
         super(Transformer, self).__init__()
-        # test_encoding_relative_positions(embedding_size=64)
-        self.position_encodings_encoder = torch.tensor(
-            [
-                positional_encoding(timestep, dim_word)
-                for timestep in range(max_seq_Length)
-            ],
-            dtype=torch.float32,
-        ).refine_names("time", "word_dim")
-        self.position_encodings_decoder = torch.tensor(
-            [
-                positional_encoding(timestep, dim_word)
-                for timestep in range(max_seq_Length)
-            ],
-            dtype=torch.float32,
-        ).refine_names("time", "word_dim")
-
         self.encoders = nn.ModuleList(
             [
                 Encoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
@@ -256,23 +243,7 @@ class Transformer(nn.Module):
         self.optimizer = torch.optim.Adam(self.parameters(), lr=ARGS.lr)
         self.criterion = nn.NLLLoss(reduction="mean")
 
-    def forward(self, input_encoder, input_decoder, mask_decoder=True):
-        if mask_decoder:
-            mask = torch.triu(
-                torch.ones(input_decoder.size("time"), input_decoder.size("time")),
-                diagonal=1,
-            ).type(torch.bool)
-        else:
-            mask = None
-
-        input_encoder = (
-            input_encoder.align_to("batch", "time", "word_dim")
-            + self.position_encodings_encoder[: input_encoder.size("time")]
-        )
-        input_decoder = (
-            input_decoder.align_to("batch", "time", "word_dim")
-            + self.position_encodings_decoder[: input_decoder.size("time")]
-        )
+    def forward(self, input_encoder, input_decoder, mask_decoder=None):
         z_enc = input_encoder
         for encoder in self.encoders:
             z_enc = encoder(z_enc)
@@ -280,23 +251,19 @@ class Transformer(nn.Module):
 
         z_dec = input_decoder
         for decoder in self.decoders:
-            z_dec = decoder(z_dec, output_encoder, mask=mask)
+            z_dec = decoder(z_dec, output_encoder, mask=mask_decoder)
 
         return torch.nn.functional.log_softmax(
             self.final_linear(z_dec).refine_names(..., "dec_vocabulary"),
             "dec_vocabulary",
         )
 
-    def train_on_batch(
-        self, input_encoder, input_decoder, target
-    ):
+    def train_on_batch(self, input_encoder, input_decoder, target, mask_decoder=None):
         target = target.align_to("batch", "time", "dec_vocabulary")
         target_idx = target.rename(None).argmax(2).refine_names("batch", "time")
         # change it later
         self.optimizer.zero_grad()
-        prediction = self.forward(
-            input_encoder, input_decoder
-        )
+        prediction = self(input_encoder, input_decoder, mask_decoder=mask_decoder)
         loss_on_batch = self.criterion(
             prediction.flatten(["batch", "time"], "batch_time").rename(None),
             target_idx.flatten(["batch", "time"], "batch_time").rename(None),
@@ -321,6 +288,9 @@ def handle_arguments():
     ARG_PARSER.add_argument("--lr", default=0.01, type=float, help="")
     ARG_PARSER.add_argument("--batch-size", default=128, type=int, help="")
     ARG_PARSER.add_argument("--epochs", default=2000, type=int, help="")
+    ARG_PARSER.add_argument(
+        "--use-mask", default=True, type=lambda x: str(x).lower() == "true", help=""
+    )
 
     return ARG_PARSER.parse_args()
 
@@ -385,7 +355,7 @@ def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=Tru
 
     n_samples = big_nb_samples if big_dataset else small_nb_samples
     X, y = math_expressions_generation(n_samples=n_samples, n_digits=3, invert=True)
-    data_processor = DataProcessor(X, y)
+    data_processor = DataProcessor(X, y, with_positional_encodings=True)
     assert data_processor.encoder_input_tr.size(
         "word_dim"
     ) == data_processor.decoder_input_tr.size("word_dim")
@@ -403,7 +373,11 @@ if __name__ == "__main__":
         num_encoders=ARGS.num_encoders,
         num_decoders=ARGS.num_decoders,
     )
-
+    mask_decoder = (
+        decoder_triangular_training_mask(data_processor.decoder_input_tr.size("time"))
+        if ARGS.use_mask
+        else None
+    )
     for epoch in range(ARGS.epochs):
         for (
             batch_encoder_inputs,
@@ -416,7 +390,9 @@ if __name__ == "__main__":
             ARGS.batch_size,
         ):
             batch_loss = transformer.train_on_batch(
-                batch_encoder_inputs, batch_decoder_inputs, batch_targets
+                batch_encoder_inputs,
+                batch_decoder_inputs,
+                batch_targets,
+                mask_decoder=mask_decoder,
             )
-            msg = f"personal implem loss on batch: {batch_loss} epoch: {epoch}"
-            print(msg)
+            print(f"personal implem loss on batch: {batch_loss} epoch: {epoch}")

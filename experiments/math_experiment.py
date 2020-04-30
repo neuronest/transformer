@@ -71,76 +71,48 @@ def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=Tru
     return data_processor
 
 
-def do_inference(
-    transformer,
-    math_expression,
-    math_expression_target,
-    char_to_idx,
-    idx_to_char,
-    max_encode_len,
-    max_decode_len,
-    voc_size,
-    GO="=",
-    EOS="\n",
-    enc_input=None,
-    dec_input=None,
-):
-    target_idxs = [char_to_idx[c] for c in math_expression_target]
-
-    dec_input_idxs = dec_input.rename(None).argmax(2)[0]
-
+def do_inference(transformer, math_expression, sequence_processor):
     # +1 for GO term
-    position_encodings = torch.tensor(
-        [
-            positional_encoding(t, voc_size)
-            for t in range(max(max_encode_len, max_decode_len) + 1)
-        ],
-        dtype=torch.float32,
-    ).refine_names("time", "word_dim")
+    def get_input(idxs_words, for_encoder=True):
+        max_timesteps = (
+            sequence_processor.max_encoder_sequence_length
+            if for_encoder
+            else sequence_processor.max_decoder_sequence_length
+        )
+        input = torch.zeros(1, max_timesteps, sequence_processor.vocabulary_size)
+        input[0, np.arange(len(idxs_words)), idxs_words] = 1
+        input = input.refine_names("batch", "time", "word_dim")
+        input += sequence_processor.position_encodings[: input.size("time")]
+        return input
 
-    mask_decoder = decoder_triangular_training_mask(dec_input.size("time"))
-    teacher_forcing_preds = transformer(
-        enc_input,
-        dec_input,
-        pytorch_transformer=pytorch_transformer,
-        mask_decoder=mask_decoder,
-    )
-    teacher_forcing_preds_idxs = teacher_forcing_preds.rename(None).argmax(2)
-    teacher_forcing_preds_chars = [
-        idx_to_char[int(idx)] for idx in teacher_forcing_preds_idxs[0]
-    ]
+    encoder_input_idxs = [sequence_processor.char_index[c] for c in math_expression]
+    encoder_input = get_input(encoder_input_idxs, for_encoder=True)
+    # encoder_input[0, np.arange(len(encoder_input_idxs)), encoder_input_idxs] = 1
+    # encoder_input = encoder_input.refine_names("batch", "time", "word_dim")
+    # encoder_input += sequence_processor.position_encodings[: encoder_input.size("time")]
 
-    encoder_input_idxs = [char_to_idx[c] for c in math_expression]
-    encoder_input = torch.zeros(1, max_encode_len, voc_size)
-    encoder_input[0, np.arange(len(encoder_input_idxs)), encoder_input_idxs] = 1
-    encoder_input = encoder_input.refine_names("batch", "time", "word_dim")
-    encoder_input += position_encodings[: encoder_input.size("time")]
-
-    decoder_input_idxs = [char_to_idx[GO]]
-    decoder_input = torch.zeros(1, len(decoder_input_idxs), voc_size)
-    decoder_input[0, np.arange(len(decoder_input_idxs)), decoder_input_idxs] = 1
-    decoder_input = decoder_input.refine_names("batch", "time", "word_dim")
-    decoder_input += position_encodings[: decoder_input.size("time")]
+    decoder_input_idxs = [sequence_processor.char_index[sequence_processor.GO]]
+    decoder_input = get_input(decoder_input_idxs, for_encoder=False)
+    # decoder_input[0, np.arange(len(decoder_input_idxs)), decoder_input_idxs] = 1
+    # decoder_input = decoder_input.refine_names("batch", "time", "word_dim")
+    # decoder_input += sequence_processor.position_encodings[: decoder_input.size("time")]
 
     decoded_expression = []
-    for _ in range(max_decode_len):
-        # see that
-        mask_decoder = decoder_triangular_training_mask(decoder_input.size("time"))
-        pred_tensor = transformer(
-            encoder_input, decoder_input, pytorch_transformer=pytorch_transformer
-        )
-        # last timestep
-        pred_tensor = pred_tensor.rename(None)[0, -1, :]
+    for _ in range(sequence_processor.max_decoder_sequence_length - 1):
+        # take last timestep prediction
+        # final timestep prediction has been optained in same conditions as training
+        # other timesteps predictions are wrong as future position have been attended
+        pred_tensor = transformer(encoder_input, decoder_input).rename(None)[0, -1, :]
         pred_idx = int(pred_tensor.argmax())
-        if pred_idx == char_to_idx[EOS]:
+        if pred_idx == sequence_processor.char_index[sequence_processor.EOS]:
             break
         decoder_input_idxs.append(int(pred_idx))
-        decoder_input = torch.zeros(1, len(decoder_input_idxs), voc_size)
-        decoder_input[0, np.arange(len(decoder_input_idxs)), decoder_input_idxs] = 1
-        decoder_input = decoder_input.refine_names("batch", "time", "word_dim")
-        decoder_input += position_encodings[: decoder_input.size("time")]
+        decoder_input = get_input(decoder_input_idxs, for_encoder=False)
+        #decoder_input[0, np.arange(len(decoder_input_idxs)), decoder_input_idxs] = 1
+        #decoder_input = decoder_input.refine_names("batch", "time", "word_dim")
+        #decoder_input += position_encodings[: decoder_input.size("time")]
 
-        pred_char = idx_to_char[pred_idx]
+        pred_char = sequence_processor.index_char[pred_idx]
         decoded_expression.append(pred_char)
     return "".join(decoded_expression)
 
@@ -159,18 +131,40 @@ if __name__ == "__main__":
     )
     validation_data = (
         (
-            (sequence_processor.encoder_input_val, sequence_processor.decoder_input_val),
+            (
+                sequence_processor.encoder_input_val,
+                sequence_processor.decoder_input_val,
+            ),
             sequence_processor.target_val,
         )
         if ARGS.validate
         else None
     )
-    transformer.train(
-        sequence_processor.encoder_input_tr,
-        sequence_processor.decoder_input_tr,
-        sequence_processor.target_tr,
-        epochs=ARGS.epochs,
-        batch_size=ARGS.batch_size,
-        do_target_mask=True,
-        validation_data=validation_data,
-    )
+    for epoch in range(ARGS.epochs):
+        transformer.train(
+            sequence_processor.encoder_input_tr,
+            sequence_processor.decoder_input_tr,
+            sequence_processor.target_tr,
+            epochs=1,
+            batch_size=ARGS.batch_size,
+            do_target_mask=True,
+            validation_data=validation_data,
+        )
+        print(epoch)
+        if (ARGS.do_inference and not ARGS.quick_debug) or (
+            ARGS.quick_debug and ARGS.do_inference and epoch > 200
+        ):
+            if ARGS.quick_debug:
+                X = sequence_processor.X_tr
+                y = sequence_processor.y_tr
+            else:
+                X = sequence_processor.X_vals
+                y = sequence_processor.y_val
+            print(os.linesep, "Inferences:")
+            for i in range(15):
+                y_pred = do_inference(transformer, X[i], sequence_processor)
+                print(
+                    f"{X[i]} = {y_pred} predicted / "
+                    f"{y[i].replace(sequence_processor.GO, '').replace(sequence_processor.EOS,'')} expected"
+                    f"{os.linesep}"
+                )

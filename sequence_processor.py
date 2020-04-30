@@ -69,15 +69,15 @@ class SequenceProcessor:
 
         if self.with_positional_encodings:
             max_nb_steps = max(encoder_input.size("time"), decoder_input.size("time"))
-            position_encodings = torch.tensor(
+            self.position_encodings = torch.tensor(
                 [
                     positional_encoding(t, encoder_input.size("word_dim"))
                     for t in range(max_nb_steps)
                 ],
                 dtype=torch.float32,
             ).refine_names("time", "word_dim")
-            encoder_input += position_encodings[: encoder_input.size("time")]
-            decoder_input += position_encodings[: decoder_input.size("time")]
+            encoder_input += self.position_encodings[: encoder_input.size("time")]
+            decoder_input += self.position_encodings[: decoder_input.size("time")]
 
         p_val = 0.25
         size_val = int(p_val * self.dataset_size)

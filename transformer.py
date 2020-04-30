@@ -147,43 +147,35 @@ class MultiHead(nn.Module):
 class NormalizationLayer(nn.Module):
     def __init__(self, dim_word):
         super(NormalizationLayer, self).__init__()
-        if ARGS.use_pytorch_norm_layer:
-            from torch.nn.modules.normalization import LayerNorm
+        self.alpha = torch.nn.Parameter(
+            data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
+            requires_grad=True,
+        )
+        # pytorch trick, special init with ones and zeros for alpha and beta
+        torch.nn.init.ones_(self.alpha)
 
-            self.layer_norm = LayerNorm(dim_word)
-        else:
-            self.alpha = torch.nn.Parameter(
-                data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
-                requires_grad=True,
-            )
-            # pytorch trick, special init with ones and zeros for alpha and beta
-            torch.nn.init.ones_(self.alpha)
-
-            self.beta = torch.nn.Parameter(
-                data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
-                requires_grad=True,
-            )
-            torch.nn.init.zeros_(self.beta)
+        self.beta = torch.nn.Parameter(
+            data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
+            requires_grad=True,
+        )
+        torch.nn.init.zeros_(self.beta)
 
     def forward(self, Z):
-        if ARGS.use_pytorch_norm_layer:
-            return self.layer_norm(Z.rename(None)).refine_names(*Z.names)
-        else:
-            mean = Z.mean("word_dim")
-            std = Z.std("word_dim")
-            mean = (
-                mean.rename(None)
-                .reshape(mean.shape + (1,))
-                .refine_names(*mean.names, "word_dim")
-            )
-            std = (
-                std.rename(None)
-                .reshape(std.shape + (1,))
-                .refine_names(*std.names, "word_dim")
-            )
-            assert std.names == mean.names == Z.names == ("batch", "time", "word_dim")
-            Z = (Z - mean) / std
-            return Z * self.alpha + self.beta
+        mean = Z.mean("word_dim")
+        std = Z.std("word_dim")
+        mean = (
+            mean.rename(None)
+            .reshape(mean.shape + (1,))
+            .refine_names(*mean.names, "word_dim")
+        )
+        std = (
+            std.rename(None)
+            .reshape(std.shape + (1,))
+            .refine_names(*std.names, "word_dim")
+        )
+        assert std.names == mean.names == Z.names == ("batch", "time", "word_dim")
+        Z = (Z - mean) / std
+        return Z * self.alpha + self.beta
 
 
 class FeedForward(nn.Module):
@@ -480,12 +472,6 @@ def handle_arguments():
     )
     ARG_PARSER.add_argument(
         "--use-pytorch-dim-per-head",
-        default=True,
-        type=lambda x: str(x).lower() == "true",
-        help="",
-    )
-    ARG_PARSER.add_argument(
-        "--use-pytorch-norm-layer",
         default=True,
         type=lambda x: str(x).lower() == "true",
         help="",

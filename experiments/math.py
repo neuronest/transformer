@@ -29,6 +29,8 @@ def handle_arguments():
     ARG_PARSER.add_argument(
         "--validate", default=True, type=lambda x: str(x).lower() == "true", help=""
     )
+
+    # Others
     ARG_PARSER.add_argument(
         "--do-inference", default=True, type=lambda x: str(x).lower() == "true", help=""
     )
@@ -39,7 +41,7 @@ def handle_arguments():
 # this code is for toy data generation, will be discarded later
 def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=True):
 
-    def math_expressions_generation(n_samples=1000, n_digits=3, invert=True):
+    def math_expressions_generation(n_samples=1000, n_digits=3, invert=False):
         X, Y = [], []
         math_operators = {
             "+": operator.add,

@@ -359,8 +359,6 @@ class Transformer(nn.Module):
         mask_decoder=None,
         pytorch_transformer=True,
     ):
-        target = target.align_to("batch", "time", "dec_vocabulary")
-        target_idx = target.rename(None).argmax(2).refine_names("batch", "time")
         # change it later
         optimizer = self.optimizer_pytorch if pytorch_transformer else self.optimizer
         # self.optimizer.zero_grad()
@@ -371,14 +369,20 @@ class Transformer(nn.Module):
             pytorch_transformer=pytorch_transformer,
             mask_decoder=mask_decoder,
         )
-        loss_on_batch = self.criterion(
-            prediction.flatten(["batch", "time"], "batch_time").rename(None),
-            target_idx.flatten(["batch", "time"], "batch_time").rename(None),
-        )
+        loss_on_batch = self._batched_ce_loss(prediction, target)
         loss_on_batch.backward()
         # self.optimizer.step()
         optimizer.step()
         return loss_on_batch
+
+    def _batched_ce_loss(self, prediction, target, reduction="mean"):
+        target = target.align_to("batch", "time", "dec_vocabulary")
+        target_idx = target.rename(None).argmax(2).refine_names("batch", "time")
+        batched_ce_loss = nn.NLLLoss(reduction=reduction)(
+            prediction.flatten(["batch", "time"], "batch_time").rename(None),
+            target_idx.flatten(["batch", "time"], "batch_time").rename(None),
+        )
+        return batched_ce_loss
 
 
 def handle_arguments():

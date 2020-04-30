@@ -450,10 +450,6 @@ def handle_arguments():
     ARG_PARSER.add_argument(
         "--quick-debug", default=True, type=lambda x: str(x).lower() == "true", help=""
     )
-    ARG_PARSER.add_argument(
-        "--use-mask", default=True, type=lambda x: str(x).lower() == "true", help=""
-    )
-
     # Transformer architecture arguments
     ARG_PARSER.add_argument("--num-heads", default=2, type=int, help="")
     ARG_PARSER.add_argument("--num-encoders", default=1, type=int, help="")
@@ -546,8 +542,6 @@ if __name__ == "__main__":
     )
     mask_decoder = (
         decoder_triangular_training_mask(data_processor.decoder_input_tr.size("time"))
-        if ARGS.use_mask
-        else None
     )
     validation_data = (
         (

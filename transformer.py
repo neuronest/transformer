@@ -299,11 +299,37 @@ class TrainableTransformer(Transformer):
         self.optimizer.step()
         return loss_on_batch
 
-    def train(self, input_encoder, input_decoder, target, do_target_mask=True, target_mask=None):
+    def train(
+        self,
+        encoder_input,
+        decoder_input,
+        target,
+        epochs=1,
+        batch_size=128,
+        do_target_mask=True,
+        target_mask=None,
+        validation_data=None,
+    ):
         training_target_mask = TrainableTransformer._handle_target_mask_arg(
-            do_target_mask, target_mask, input_decoder
+            do_target_mask, target_mask, encoder_input
         )
-
+        for epoch in range(epochs):
+            for (
+                batch_encoder_inputs,
+                batch_decoder_inputs,
+                batch_targets,
+            ) in TrainableTransformer.generate_batches(
+                encoder_input, decoder_input, target, batch_size
+            ):
+                batch_loss = self.train_on_batch(
+                    batch_encoder_inputs,
+                    batch_decoder_inputs,
+                    batch_targets,
+                    mask_decoder=training_target_mask,
+                )
+                print(f"loss on batch: {batch_loss}")
+            if validation_data:
+                self.validate(validation_data, mask_decoder=None)
 
     @staticmethod
     def _handle_target_mask_arg(do_target_mask, target_mask, input_decoder):

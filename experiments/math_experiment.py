@@ -6,7 +6,8 @@ import argparse
 import operator
 
 from sequence_processor import SequenceProcessor
-from transformer import decoder_triangular_training_mask, TrainableTransformer
+from transformer import TrainableTransformer
+from transformer import positional_encoding
 
 ARG_PARSER = argparse.ArgumentParser()
 ARGS = None
@@ -40,7 +41,6 @@ def handle_arguments():
 
 # this code is for toy data generation, will be discarded later
 def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=True):
-
     def math_expressions_generation(n_samples=1000, n_digits=3, invert=False):
         X, Y = [], []
         math_operators = {

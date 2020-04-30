@@ -272,8 +272,7 @@ class Transformer(nn.Module):
             ]
         )
         # layer norm after encoders comes from Pytorch implemetation
-        if ARGS.use_pytorch_norm_after_encoders_decoders:
-            self.layer_norm_encoder = NormalizationLayer(dim_word)
+        self.layer_norm_encoder = NormalizationLayer(dim_word)
         self.decoders = nn.ModuleList(
             [
                 Decoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
@@ -281,8 +280,7 @@ class Transformer(nn.Module):
             ]
         )
         # layer norm after decoders comes from Pytorch implemetation
-        if ARGS.use_pytorch_norm_after_encoders_decoders:
-            self.layer_norm_decoder = NormalizationLayer(dim_word)
+        self.layer_norm_decoder = NormalizationLayer(dim_word)
         self.final_linear = nn.Linear(dim_word, decoder_vocabulary_size, bias=True)
         self.optimizer = torch.optim.Adam(self.parameters(), lr=ARGS.lr)
 
@@ -321,16 +319,14 @@ class Transformer(nn.Module):
             for encoder in self.encoders:
                 z_enc = encoder(z_enc)
             # pytorch implem adds norm layer after encoders
-            if ARGS.use_pytorch_norm_after_encoders_decoders:
-                z_enc = self.layer_norm_encoder(z_enc)
+            z_enc = self.layer_norm_encoder(z_enc)
             output_encoder = z_enc
 
             z_dec = input_decoder
             for decoder in self.decoders:
                 z_dec = decoder(z_dec, output_encoder, mask=mask_decoder)
             # pytorch implem adds norm layer after decoders
-            if ARGS.use_pytorch_norm_after_encoders_decoders:
-                z_dec = self.layer_norm_decoder(z_dec)
+            z_dec = self.layer_norm_decoder(z_dec)
             return torch.nn.functional.log_softmax(
                 self.final_linear(z_dec).refine_names(..., "dec_vocabulary"),
                 "dec_vocabulary",
@@ -496,12 +492,6 @@ def handle_arguments():
     )
     ARG_PARSER.add_argument(
         "--use-pytorch-linearout-bias",
-        default=True,
-        type=lambda x: str(x).lower() == "true",
-        help="",
-    )
-    ARG_PARSER.add_argument(
-        "--use-pytorch-norm-after-encoders-decoders",
         default=True,
         type=lambda x: str(x).lower() == "true",
         help="",

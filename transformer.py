@@ -71,8 +71,8 @@ class MultiHead(nn.Module):
             self.K = nn.Linear(dim_word, self.dim_repr, bias=True)
             self.V = nn.Linear(dim_word, self.dim_repr, bias=True)
             self.linear_out = nn.Linear(
-                self.dim_repr, dim_word, bias=ARGS.use_pytorch_linearout_bias
-            )  # bias=False
+                self.dim_repr, dim_word, bias=True
+            )
         else:
             from torch.nn.modules.activation import MultiheadAttention
 
@@ -486,12 +486,6 @@ def handle_arguments():
     )
     ARG_PARSER.add_argument(
         "--use-pytorch-norm-layer",
-        default=True,
-        type=lambda x: str(x).lower() == "true",
-        help="",
-    )
-    ARG_PARSER.add_argument(
-        "--use-pytorch-linearout-bias",
         default=True,
         type=lambda x: str(x).lower() == "true",
         help="",

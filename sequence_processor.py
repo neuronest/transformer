@@ -68,7 +68,7 @@ class SequenceProcessor:
         target = target.refine_names("batch", "time", "dec_vocabulary")
 
         if self.with_positional_encodings:
-            max_nb_steps = max(encoder_input.size("word_dim"), decoder_input.size("word_dim"))
+            max_nb_steps = max(encoder_input.size("time"), decoder_input.size("time"))
             position_encodings = torch.tensor(
                 [
                     positional_encoding(t, encoder_input.size("word_dim"))

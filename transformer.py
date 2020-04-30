@@ -269,3 +269,56 @@ def decoder_triangular_training_mask(nb_timesteps):
         torch.bool
     )
     return mask
+
+
+class TrainableTransformer(Transformer):
+    def __init__(self, decoder_vocabulary_size, lr, *args, **kwargs):
+        super(TrainableTransformer, self).__init__(*args, **kwargs)
+        self.final_linear = nn.Linear(self.dim_word, decoder_vocabulary_size, bias=True)
+        # see how change optimizer lr during training
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+
+    def forward(
+            self, input_encoder, input_decoder, mask_decoder=None
+    ):
+        z_dec = Transformer.forward(self, input_encoder, input_decoder, mask_decoder=None)
+        return torch.nn.functional.log_softmax(
+            self.final_linear(z_dec).refine_names(..., "dec_vocabulary"),
+            "dec_vocabulary",
+        )
+
+    def train_on_batch(
+        self,
+        input_encoder,
+        input_decoder,
+        target,
+        mask_decoder=None,
+    ):
+        self.optimizer.zero_grad()
+        prediction = self(
+            input_encoder,
+            input_decoder,
+            mask_decoder=mask_decoder,
+        )
+        loss_on_batch = self._batched_ce_loss(prediction, target)
+        loss_on_batch.backward()
+        self.optimizer.step()
+        return loss_on_batch
+
+    def _batched_ce_loss(self, prediction, target, reduction="mean"):
+        target = target.align_to("batch", "time", "dec_vocabulary")
+        target_idx = target.rename(None).argmax(2).refine_names("batch", "time")
+        batched_ce_loss = nn.NLLLoss(reduction=reduction)(
+            prediction.flatten(["batch", "time"], "batch_time").rename(None),
+            target_idx.flatten(["batch", "time"], "batch_time").rename(None),
+        )
+        return batched_ce_loss
+
+    def validate(self, validation_data, mask_decoder=None):
+        input_val, target_val = validation_data
+        prediction_val = self(
+            *input_val,
+            mask_decoder=mask_decoder,
+        )
+        loss_on_val = self._batched_ce_loss(prediction_val, target_val)
+        return loss_on_val

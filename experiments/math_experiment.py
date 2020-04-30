@@ -63,7 +63,7 @@ def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=Tru
         return X, Y
 
     n_samples = big_nb_samples if big_dataset else small_nb_samples
-    X, y = math_expressions_generation(n_samples=n_samples, n_digits=3, invert=invert)
+    X, y = math_expressions_generation(n_samples=n_samples, n_digits=3, invert=False)
     data_processor = SequenceProcessor(X, y, with_positional_encodings=True)
     assert data_processor.encoder_input_tr.size(
         "word_dim"

@@ -156,13 +156,14 @@ class NormalizationLayer(nn.Module):
                 data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
                 requires_grad=True,
             )
-            # they perform special init with ones and zeros for w and b
-            torch.nn.init.xavier_normal_(self.alpha)
+            # pytorch trick, special init with ones and zeros for alpha and beta
+            torch.nn.init.ones_(self.alpha)
+
             self.beta = torch.nn.Parameter(
                 data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
                 requires_grad=True,
             )
-            torch.nn.init.xavier_normal_(self.beta)
+            torch.nn.init.zeros_(self.beta)
 
     def forward(self, Z):
         if ARGS.use_pytorch_norm_layer:

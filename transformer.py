@@ -47,7 +47,6 @@ def attention(keys, queries, values, mask=None, temperature=None):
         mask_infs = torch.zeros(mask.shape)
         mask_infs[mask] -= torch.Tensor([float("Inf")])
         Z += mask_infs
-        # Z.masked_fill_(mask, float('-inf'))
     Z = torch.nn.functional.softmax(Z, "time_keys")
 
     Z = torch.matmul(
@@ -65,96 +64,81 @@ class MultiHead(nn.Module):
         dim_value_per_head=None,
     ):
         super(MultiHead, self).__init__()
-        if not ARGS.use_pytorch_multi_head:
-            self.dim_word = dim_word
-            self.num_heads = num_heads
-            self.dim_repr = (
-                dim_word if ARGS.use_pytorch_dim_per_head else dim_word * num_heads
-            )
-            dim_key_query_all_heads, dim_value_all_heads = self.dim_word, self.dim_word
-            if dim_key_query_per_head is not None:
-                dim_key_query_all_heads = dim_key_query_per_head * num_heads
-            if dim_value_per_head is not None:
-                dim_value_all_heads = dim_value_per_head * num_heads
+        self.dim_word = dim_word
+        self.num_heads = num_heads
+        self.dim_key_query_all_heads, self.dim_value_all_heads = (
+            self.dim_word,
+            self.dim_word,
+        )
+        if dim_key_query_per_head is not None:
+            self.dim_key_query_all_heads = dim_key_query_per_head * num_heads
+        if dim_value_per_head is not None:
+            self.dim_value_all_heads = dim_value_per_head * num_heads
 
-            assert dim_key_query_all_heads // num_heads * num_heads == dim_key_query_all_heads
-            assert dim_value_all_heads // num_heads * num_heads == dim_value_all_heads
-            # the greater the number of dimensions involved in the dot products
-            # before softmax the more we scalre to flatten the probabilities
-            self.d_k = float(dim_key_query_all_heads)
-            self.Q = nn.Linear(dim_word, dim_key_query_all_heads, bias=True)
-            self.K = nn.Linear(dim_word, dim_key_query_all_heads, bias=True)
-            self.V = nn.Linear(dim_word, dim_value_all_heads, bias=True)
-            self.linear_out = nn.Linear(dim_value_all_heads, dim_word, bias=True)
-        else:
-            from torch.nn.modules.activation import MultiheadAttention
-
-            self.multi_head = MultiheadAttention(dim_word, num_heads, dropout=0.0)
+        assert (
+            self.dim_key_query_all_heads // num_heads * num_heads
+            == self.dim_key_query_all_heads
+        )
+        assert (
+            self.dim_value_all_heads // num_heads * num_heads
+            == self.dim_value_all_heads
+        )
+        # the greater the number of dimensions involved in the dot products
+        # before softmax the more we scale to flatten the probabilities
+        self.d_k = float(self.dim_key_query_all_heads)
+        self.Q = nn.Linear(dim_word, self.dim_key_query_all_heads, bias=True)
+        self.K = nn.Linear(dim_word, self.dim_key_query_all_heads, bias=True)
+        self.V = nn.Linear(dim_word, self.dim_value_all_heads, bias=True)
+        self.linear_out = nn.Linear(self.dim_value_all_heads, dim_word, bias=True)
 
     def forward(self, input_query, input_key, input_value, mask=None):
-        if ARGS.use_pytorch_multi_head:
-            return (
-                self.multi_head(
-                    input_query.align_to("time", "batch", "word_dim").rename(None),
-                    input_key.align_to("time", "batch", "word_dim").rename(None),
-                    input_value.align_to("time", "batch", "word_dim").rename(None),
-                    attn_mask=mask,
-                )[0]
-                .refine_names("time", "batch", "word_dim")
-                .align_to("batch", "time", "word_dim")
-            )
-        else:
-            assert "batch" in input_query.names and "time" in input_query.names
-            assert "batch" in input_key.names and "time" in input_key.names
-            assert "batch" in input_value.names and "time" in input_value.names
+        assert "batch" in input_query.names and "time" in input_query.names
+        assert "batch" in input_key.names and "time" in input_key.names
+        assert "batch" in input_value.names and "time" in input_value.names
 
-            def multi_head_repr(linear_layer, input, num_heads, dim_all_heads):
+        def multi_head_repr(linear_layer, input, num_heads, dim_all_heads):
 
-                multi_head_representation = linear_layer(input).refine_names(
-                    ..., "dim_all_heads"
-                )
-                # other possibility, dim_representation does not have to be divisible by
-                # multi_head_representation = multi_head_representation.unflatten(
-                #    "dim_times_n_head", [("head", num_heads), ("dim", dim_representation)]
-                # )
-                multi_head_representation = multi_head_representation.unflatten(
-                    "dim_all_heads",
-                    [("head", num_heads), ("dim", dim_all_heads // num_heads)],
-                )
-                multi_head_representation = multi_head_representation.align_to(
-                    "head", "batch", "time", "dim"
-                )
-                return multi_head_representation
+            multi_head_representation = linear_layer(input).refine_names(
+                ..., "dim_all_heads"
+            )
+            multi_head_representation = multi_head_representation.unflatten(
+                "dim_all_heads",
+                [("head", num_heads), ("dim", dim_all_heads // num_heads)],
+            )
+            multi_head_representation = multi_head_representation.align_to(
+                "head", "batch", "time", "dim"
+            )
+            return multi_head_representation
 
-            multi_head_q = multi_head_repr(
-                self.Q, input_query, self.num_heads, self.dim_repr
-            )
-            multi_head_k = multi_head_repr(
-                self.K, input_key, self.num_heads, self.dim_repr
-            )
-            multi_head_v = multi_head_repr(
-                self.V, input_value, self.num_heads, self.dim_repr
-            )
+        multi_head_q = multi_head_repr(
+            self.Q, input_query, self.num_heads, self.dim_key_query_all_heads
+        )
+        multi_head_k = multi_head_repr(
+            self.K, input_key, self.num_heads, self.dim_key_query_all_heads
+        )
+        multi_head_v = multi_head_repr(
+            self.V, input_value, self.num_heads, self.dim_value_all_heads
+        )
 
-            assert (
-                multi_head_k.names
-                == multi_head_q.names
-                == multi_head_v.names
-                == ("head", "batch", "time", "dim")
-            )
+        assert (
+            multi_head_k.names
+            == multi_head_q.names
+            == multi_head_v.names
+            == ("head", "batch", "time", "dim")
+        )
 
-            Z = attention(
-                multi_head_k,
-                multi_head_q,
-                multi_head_v,
-                mask=mask,
-                temperature=np.sqrt(self.d_k),
-            )
-            Z = Z.align_to("batch", "time", "head", "dim").flatten(
-                ["head", "dim"], "dim_all_heads"
-            )
-            Z = self.linear_out(Z).refine_names("batch", "time", "word_dim")
-            return Z
+        Z = attention(
+            multi_head_k,
+            multi_head_q,
+            multi_head_v,
+            mask=mask,
+            temperature=np.sqrt(self.d_k),
+        )
+        Z = Z.align_to("batch", "time", "head", "dim").flatten(
+            ["head", "dim"], "dim_all_heads"
+        )
+        Z = self.linear_out(Z).refine_names("batch", "time", "word_dim")
+        return Z
 
 
 class NormalizationLayer(nn.Module):

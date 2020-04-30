@@ -86,6 +86,10 @@ class DataProcessor:
         idxs_tr = idxs[:-size_val]
         idxs_val = idxs[-size_val:]
         (
+            self.X_tr,
+            self.X_val,
+            self.y_tr,
+            self.y_val,
             self.encoder_input_tr,
             self.encoder_input_val,
             self.decoder_input_tr,
@@ -93,6 +97,10 @@ class DataProcessor:
             self.target_tr,
             self.target_val,
         ) = (
+            np.array(self.X)[idxs_tr],
+            np.array(self.X)[idxs_val],
+            np.array(self.y)[idxs_tr],
+            np.array(self.y)[idxs_val],
             encoder_input.rename(None)[idxs_tr].refine_names(*encoder_input.names),
             encoder_input.rename(None)[idxs_val].refine_names(*encoder_input.names),
             decoder_input.rename(None)[idxs_tr].refine_names(*decoder_input.names),

@@ -1,72 +1,177 @@
 import numpy as np
 import torch.nn as nn
 import torch
-import argparse
-
-ARG_PARSER = argparse.ArgumentParser()
-ARGS = None
 
 
-def decoder_triangular_training_mask(nb_timesteps):
-    mask = torch.triu(torch.ones(nb_timesteps, nb_timesteps), diagonal=1).type(
-        torch.bool
-    )
-    return mask
+class Transformer(nn.Module):
+    def __init__(
+        self,
+        dim_word,
+        num_heads=8,
+        num_encoders=6,
+        num_decoders=6,
+        dim_feedforward=2048,
+    ):
+        super(Transformer, self).__init__()
+        self.encoders = nn.ModuleList(
+            [
+                Encoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
+                for _ in range(num_encoders)
+            ]
+        )
+        # layer norm after encoders comes from Pytorch implemetation
+        self.layer_norm_encoder = NormalizationLayer(dim_word)
+        self.decoders = nn.ModuleList(
+            [
+                Decoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
+                for _ in range(num_decoders)
+            ]
+        )
+        # layer norm after decoders comes from Pytorch implemetation
+        self.layer_norm_decoder = NormalizationLayer(dim_word)
+
+    def forward(self, input_encoder, input_decoder, mask_decoder=None):
+        z_enc = input_encoder
+        for encoder in self.encoders:
+            z_enc = encoder(z_enc)
+        # pytorch implem adds norm layer after encoders
+        z_enc = self.layer_norm_encoder(z_enc)
+        output_encoder = z_enc
+
+        z_dec = input_decoder
+        for decoder in self.decoders:
+            z_dec = decoder(z_dec, output_encoder, mask=mask_decoder)
+        # pytorch implem adds norm layer after decoders
+        z_dec = self.layer_norm_decoder(z_dec)
+        return z_dec
 
 
-def positional_encoding(position, encoding_dim):
-    dimensions = np.arange(encoding_dim)
-    dimensions_i = dimensions // 2
-    dimensions_are_even = dimensions % 2 == 0
-    positional_encoding = position / (10000 ** (2 * dimensions_i / encoding_dim))
-    positional_encoding[dimensions_are_even] = np.sin(
-        positional_encoding[dimensions_are_even]
-    )
-    positional_encoding[~dimensions_are_even] = np.cos(
-        positional_encoding[~dimensions_are_even]
-    )
-    return positional_encoding
+class Decoder(nn.Module):
+    def __init__(self, dim_word_decoder, num_heads=8, dim_feedforward=2048):
+        super(Decoder, self).__init__()
+        self.multi_head_self_att = MultiHead(dim_word_decoder, num_heads=num_heads)
+        self.norm_layer = NormalizationLayer(dim_word_decoder)
+        self.multi_head_enc_dec_att = MultiHead(dim_word_decoder, num_heads=num_heads)
+        self.norm_layer2 = NormalizationLayer(dim_word_decoder)
+        self.ffnn = FeedForward(dim_word_decoder, dim_feedforward=dim_feedforward)
+        self.norm_layer3 = NormalizationLayer(dim_word_decoder)
+
+    def forward(self, input_decoder, input_seq_encodings, mask=None):
+        z_self_att = self.multi_head_self_att(
+            input_decoder, input_decoder, input_decoder, mask=mask
+        )
+
+        z_norm1 = self.norm_layer((z_self_att + input_decoder.align_as(z_self_att)))
+
+        # Encoder Decoder attention
+        z_enc_dec_att = self.multi_head_enc_dec_att(
+            z_norm1, input_seq_encodings, input_seq_encodings
+        )
+        enc_dec_focused_normalized = self.norm_layer2(z_enc_dec_att + z_norm1)
+        Z_forwarded = self.ffnn(enc_dec_focused_normalized).refine_names(
+            *enc_dec_focused_normalized.names
+        )
+        Z_final = self.norm_layer3((enc_dec_focused_normalized + Z_forwarded))
+        return Z_final
 
 
-def attention(keys, queries, values, mask=None, temperature=None):
-    assert keys.names == values.names == queries.names
-    assert "time" in keys.names and "dim" in keys.names
-    assert keys.size("time") == values.size("time")
-    other_names = tuple(name for name in keys.names if name not in ("time", "dim"))
+class Encoder(nn.Module):
+    def __init__(self, dim_word, num_heads=8, dim_feedforward=2048):
+        super(Encoder, self).__init__()
+        self.multi_head = MultiHead(dim_word, num_heads=num_heads)
+        self.norm_layer = NormalizationLayer(dim_word)
+        self.ffnn = FeedForward(dim_word, dim_feedforward=dim_feedforward)
+        self.norm_layer2 = NormalizationLayer(dim_word)
 
-    Z = torch.matmul(
-        queries,
-        keys.rename(time="time_keys").align_to(*other_names, "dim", "time_keys"),
-    )
-    if temperature:
-        Z /= temperature
-    assert Z.names == other_names + ("time", "time_keys")
+    # input is either original input or Z from previous encoder
+    def forward(self, input):
+        Z = self.multi_head(input_query=input, input_key=input, input_value=input)
+        Z = self.norm_layer((Z + input.align_as(Z)))
+        assert Z.names == ("batch", "time", "word_dim")
+        Z_forwarded = self.ffnn(Z).refine_names(*Z.names)
+        Z_final = self.norm_layer2((Z + Z_forwarded))
+        return Z_final
 
-    # if mask provided then mask some positions from softmax computation
-    if mask is not None:
-        mask_infs = torch.zeros(mask.shape)
-        mask_infs[mask] -= torch.Tensor([float("Inf")])
-        Z += mask_infs
-        # Z.masked_fill_(mask, float('-inf'))
-    Z = torch.nn.functional.softmax(Z, "time_keys")
 
-    Z = torch.matmul(
-        Z, values.rename(time="time_keys").align_to(*other_names, "time_keys", "dim")
-    )
-    return Z
+class FeedForward(nn.Module):
+    def __init__(self, word_dim, dim_feedforward=2048):
+        super(FeedForward, self).__init__()
+        self.linear1 = nn.Linear(word_dim, dim_feedforward, bias=True)
+        self.linear2 = nn.Linear(dim_feedforward, word_dim, bias=True)
+
+    def forward(self, input):
+        return self.linear2(torch.nn.functional.relu(self.linear1(input)))
+
+
+class NormalizationLayer(nn.Module):
+    def __init__(self, dim_word):
+        super(NormalizationLayer, self).__init__()
+        self.alpha = torch.nn.Parameter(
+            data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
+            requires_grad=True,
+        )
+        # pytorch trick, special init with ones and zeros for alpha and beta
+        torch.nn.init.ones_(self.alpha)
+
+        self.beta = torch.nn.Parameter(
+            data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
+            requires_grad=True,
+        )
+        torch.nn.init.zeros_(self.beta)
+
+    def forward(self, Z):
+        mean = Z.mean("word_dim")
+        std = Z.std("word_dim")
+        mean = (
+            mean.rename(None)
+            .reshape(mean.shape + (1,))
+            .refine_names(*mean.names, "word_dim")
+        )
+        std = (
+            std.rename(None)
+            .reshape(std.shape + (1,))
+            .refine_names(*std.names, "word_dim")
+        )
+        assert std.names == mean.names == Z.names == ("batch", "time", "word_dim")
+        Z = (Z - mean) / std
+        return Z * self.alpha + self.beta
 
 
 class MultiHead(nn.Module):
-    def __init__(self, dim_word, num_heads=8):
+    def __init__(
+        self,
+        dim_word,
+        num_heads=8,
+        dim_key_query_per_head=None,
+        dim_value_per_head=None,
+    ):
         super(MultiHead, self).__init__()
-        assert dim_word // num_heads * num_heads == dim_word
         self.dim_word = dim_word
         self.num_heads = num_heads
-        self.d_k = float(dim_word)
-        self.Q = nn.Linear(dim_word, dim_word, bias=True)
-        self.K = nn.Linear(dim_word, dim_word, bias=True)
-        self.V = nn.Linear(dim_word, dim_word, bias=True)
-        self.linear_out = nn.Linear(dim_word, dim_word, bias=True)  # bias=False
+        self.dim_key_query_all_heads, self.dim_value_all_heads = (
+            self.dim_word,
+            self.dim_word,
+        )
+        if dim_key_query_per_head is not None:
+            self.dim_key_query_all_heads = dim_key_query_per_head * num_heads
+        if dim_value_per_head is not None:
+            self.dim_value_all_heads = dim_value_per_head * num_heads
+
+        assert (
+            self.dim_key_query_all_heads // num_heads * num_heads
+            == self.dim_key_query_all_heads
+        )
+        assert (
+            self.dim_value_all_heads // num_heads * num_heads
+            == self.dim_value_all_heads
+        )
+        # the greater the number of dimensions involved in the dot products
+        # before softmax the more we scale to flatten the probabilities
+        self.d_k = float(self.dim_key_query_all_heads)
+        self.Q = nn.Linear(dim_word, self.dim_key_query_all_heads, bias=True)
+        self.K = nn.Linear(dim_word, self.dim_key_query_all_heads, bias=True)
+        self.V = nn.Linear(dim_word, self.dim_value_all_heads, bias=True)
+        self.linear_out = nn.Linear(self.dim_value_all_heads, dim_word, bias=True)
 
     def forward(self, input_query, input_key, input_value, mask=None):
         assert "batch" in input_query.names and "time" in input_query.names
@@ -78,10 +183,6 @@ class MultiHead(nn.Module):
             multi_head_representation = linear_layer(input).refine_names(
                 ..., "dim_all_heads"
             )
-            # other possibility, dim_representation does not have to be divisible by
-            # multi_head_representation = multi_head_representation.unflatten(
-            #    "dim_times_n_head", [("head", num_heads), ("dim", dim_representation)]
-            # )
             multi_head_representation = multi_head_representation.unflatten(
                 "dim_all_heads",
                 [("head", num_heads), ("dim", dim_all_heads // num_heads)],
@@ -92,11 +193,13 @@ class MultiHead(nn.Module):
             return multi_head_representation
 
         multi_head_q = multi_head_repr(
-            self.Q, input_query, self.num_heads, self.dim_word
+            self.Q, input_query, self.num_heads, self.dim_key_query_all_heads
         )
-        multi_head_k = multi_head_repr(self.K, input_key, self.num_heads, self.dim_word)
+        multi_head_k = multi_head_repr(
+            self.K, input_key, self.num_heads, self.dim_key_query_all_heads
+        )
         multi_head_v = multi_head_repr(
-            self.V, input_value, self.num_heads, self.dim_word
+            self.V, input_value, self.num_heads, self.dim_value_all_heads
         )
 
         assert (
@@ -120,279 +223,49 @@ class MultiHead(nn.Module):
         return Z
 
 
-class NormalizationLayer(nn.Module):
-    def __init__(self, dim_word):
-        super(NormalizationLayer, self).__init__()
-        self.alpha = torch.nn.Parameter(
-            data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
-            requires_grad=True,
-        )
-        # they perform special init with ones and zeros for w and b
-        torch.nn.init.xavier_normal_(self.alpha)
-        self.beta = torch.nn.Parameter(
-            data=torch.rand(1, dim_word).refine_names("time", "word_dim"),
-            requires_grad=True,
-        )
-        torch.nn.init.xavier_normal_(self.beta)
+def attention(keys, queries, values, mask=None, temperature=None):
+    assert keys.names == values.names == queries.names
+    assert "time" in keys.names and "dim" in keys.names
+    assert keys.size("time") == values.size("time")
+    other_names = tuple(name for name in keys.names if name not in ("time", "dim"))
 
-    def forward(self, Z):
-        mean = Z.mean("word_dim")
-        std = Z.std("word_dim")
-        mean = (
-            mean.rename(None)
-            .reshape(mean.shape + (1,))
-            .refine_names(*mean.names, "word_dim")
-        )
-        std = (
-            std.rename(None)
-            .reshape(std.shape + (1,))
-            .refine_names(*std.names, "word_dim")
-        )
-        assert std.names == mean.names == Z.names == ("batch", "time", "word_dim")
-        Z = (Z - mean) / std
-        return Z * self.alpha + self.beta
-
-
-class FeedForward(nn.Module):
-    def __init__(self, word_dim, dim_feedforward=2048):
-        super(FeedForward, self).__init__()
-        self.linear1 = nn.Linear(word_dim, dim_feedforward, bias=True)
-        self.linear2 = nn.Linear(dim_feedforward, word_dim, bias=True)
-
-    def forward(self, input):
-        return self.linear2(torch.nn.functional.relu(self.linear1(input)))
-
-
-class Encoder(nn.Module):
-    def __init__(self, dim_word, num_heads=8, dim_feedforward=2048):
-        super(Encoder, self).__init__()
-        self.multi_head = MultiHead(dim_word, num_heads=num_heads)
-        self.norm_layer = NormalizationLayer(dim_word)
-        self.ffnn = FeedForward(dim_word, dim_feedforward=dim_feedforward)
-        self.norm_layer2 = NormalizationLayer(dim_word)
-
-    # input is either original input or Z from previous encoder
-    def forward(self, input):
-        Z = self.multi_head(input_query=input, input_key=input, input_value=input)
-        Z = self.norm_layer((Z + input.align_as(Z)))
-        assert Z.names == ("batch", "time", "word_dim")
-        Z_forwarded = self.ffnn(Z).refine_names(*Z.names)
-        Z_final = self.norm_layer2((Z + Z_forwarded))
-        return Z_final
-
-
-class Decoder(nn.Module):
-    def __init__(self, dim_word_decoder, num_heads=8, dim_feedforward=2048):
-        super(Decoder, self).__init__()
-        self.multi_head_self_att = MultiHead(dim_word_decoder, num_heads=num_heads)
-        self.norm_layer = NormalizationLayer(dim_word_decoder)
-        self.multi_head_enc_dec_att = MultiHead(dim_word_decoder, num_heads=num_heads)
-        self.norm_layer2 = NormalizationLayer(dim_word_decoder)
-        self.ffnn = FeedForward(dim_word_decoder, dim_feedforward=dim_feedforward)
-        self.norm_layer3 = NormalizationLayer(dim_word_decoder)
-
-    def forward(self, input_decoder, input_seq_encodings, mask=None):
-        z_self_att = self.multi_head_self_att(
-            input_decoder.align_to("batch", "time", "word_dim"),
-            input_decoder.align_to("batch", "time", "word_dim"),
-            input_decoder.align_to("batch", "time", "word_dim"),
-            mask=mask,
-        )
-        z_norm1 = self.norm_layer((z_self_att + input_decoder.align_as(z_self_att)))
-
-        # Encoder Decoder attention
-        z_enc_dec_att = self.multi_head_enc_dec_att(
-            z_norm1, input_seq_encodings, input_seq_encodings
-        )
-        enc_dec_focused_normalized = self.norm_layer2(z_enc_dec_att + z_norm1)
-        Z_forwarded = self.ffnn(enc_dec_focused_normalized).refine_names(
-            *enc_dec_focused_normalized.names
-        )
-        Z_final = self.norm_layer3((enc_dec_focused_normalized + Z_forwarded))
-        return Z_final
-
-
-class Transformer(nn.Module):
-    def __init__(
-        self,
-        dim_word,
-        decoder_vocabulary_size,
-        num_heads=8,
-        num_encoders=6,
-        num_decoders=6,
-        dim_feedforward=2048,
-    ):
-        super(Transformer, self).__init__()
-        self.encoders = nn.ModuleList(
-            [
-                Encoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
-                for _ in range(num_encoders)
-            ]
-        )
-        # layer norm after encoders comes from Pytorch implemetation
-        self.layer_norm_encoder = NormalizationLayer(dim_word)
-        self.decoders = nn.ModuleList(
-            [
-                Decoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
-                for _ in range(num_decoders)
-            ]
-        )
-        # layer norm after decoders comes from Pytorch implemetation
-        self.layer_norm_decoder = NormalizationLayer(dim_word)
-        self.final_linear = nn.Linear(dim_word, decoder_vocabulary_size, bias=True)
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=ARGS.lr)
-        self.criterion = nn.NLLLoss(reduction="mean")
-
-    def forward(self, input_encoder, input_decoder, mask_decoder=None):
-        z_enc = input_encoder
-        for encoder in self.encoders:
-            z_enc = encoder(z_enc)
-        output_encoder = z_enc
-
-        z_dec = input_decoder
-        for decoder in self.decoders:
-            z_dec = decoder(z_dec, output_encoder, mask=mask_decoder)
-
-        return torch.nn.functional.log_softmax(
-            self.final_linear(z_dec).refine_names(..., "dec_vocabulary"),
-            "dec_vocabulary",
-        )
-
-    def train_on_batch(self, input_encoder, input_decoder, target, mask_decoder=None):
-        target = target.align_to("batch", "time", "dec_vocabulary")
-        target_idx = target.rename(None).argmax(2).refine_names("batch", "time")
-        # change it later
-        self.optimizer.zero_grad()
-        prediction = self(input_encoder, input_decoder, mask_decoder=mask_decoder)
-        loss_on_batch = self.criterion(
-            prediction.flatten(["batch", "time"], "batch_time").rename(None),
-            target_idx.flatten(["batch", "time"], "batch_time").rename(None),
-        )
-        loss_on_batch.backward()
-        self.optimizer.step()
-        return loss_on_batch
-
-
-def handle_arguments():
-    # Debug arguments
-    ARG_PARSER.add_argument(
-        "--quick-debug", default=True, type=lambda x: str(x).lower() == "true", help=""
+    Z = torch.matmul(
+        queries,
+        keys.rename(time="time_keys").align_to(*other_names, "dim", "time_keys"),
     )
+    if temperature:
+        Z /= temperature
+    assert Z.names == other_names + ("time", "time_keys")
 
-    # Transformer architecture arguments
-    ARG_PARSER.add_argument("--num-heads", default=2, type=int, help="")
-    ARG_PARSER.add_argument("--num-encoders", default=1, type=int, help="")
-    ARG_PARSER.add_argument("--num-decoders", default=1, type=int, help="")
+    # if mask provided then mask some positions from softmax computation
+    if mask is not None:
+        mask_infs = torch.zeros(mask.shape)
+        mask_infs[mask] -= torch.Tensor([float("Inf")])
+        Z += mask_infs
+    Z = torch.nn.functional.softmax(Z, "time_keys")
 
-    # Training arguments
-    ARG_PARSER.add_argument("--lr", default=0.01, type=float, help="")
-    ARG_PARSER.add_argument("--batch-size", default=128, type=int, help="")
-    ARG_PARSER.add_argument("--epochs", default=2000, type=int, help="")
-    ARG_PARSER.add_argument(
-        "--use-mask", default=True, type=lambda x: str(x).lower() == "true", help=""
+    Z = torch.matmul(
+        Z, values.rename(time="time_keys").align_to(*other_names, "time_keys", "dim")
     )
+    return Z
 
-    return ARG_PARSER.parse_args()
 
-
-def generate_batches(encoder_inputs, decoder_inputs, targets, batch_size):
-    assert (
-        encoder_inputs.names[0]
-        == decoder_inputs.names[0]
-        == targets.names[0]
-        == "batch"
+def positional_encoding(position, encoding_dim):
+    dimensions = np.arange(encoding_dim)
+    dimensions_i = dimensions // 2
+    dimensions_are_even = dimensions % 2 == 0
+    positional_encoding = position / (10000 ** (2 * dimensions_i / encoding_dim))
+    positional_encoding[dimensions_are_even] = np.sin(
+        positional_encoding[dimensions_are_even]
     )
-    samples_idxs = np.arange(encoder_inputs.size("batch"))
-    np.random.shuffle(samples_idxs)
-    nb_batch = encoder_inputs.size("batch") // batch_size
-    # so can keep on calling generator after inner loop has expired all batches
-    while True:
-        for batch_idx in range(nb_batch):
-            batch_idxs = samples_idxs[
-                batch_idx * batch_size : (batch_idx + 1) * batch_size
-            ]
-            batch = (
-                encoder_inputs.rename(None)[batch_idxs].refine_names(
-                    *encoder_inputs.names
-                ),
-                decoder_inputs.rename(None)[batch_idxs].refine_names(
-                    *decoder_inputs.names
-                ),
-                targets.rename(None)[batch_idxs].refine_names(*targets.names),
-            )
-            yield batch
-
-
-# this code is for toy data generation, will be discarded later
-def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=True):
-    import operator
-
-    # raises error if put at file top as data_processor
-    # imports transformer module function
-    # not a problem since get_math_data will be discarded eventually
-    from data_processor import DataProcessor
-
-    def math_expressions_generation(n_samples=1000, n_digits=3, invert=True):
-        X, Y = [], []
-        math_operators = {
-            "+": operator.add,
-            "-": operator.sub,
-            "*": operator.mul,
-            "/": operator.truediv,
-            "%": operator.mod,
-        }
-        for i in range(n_samples):
-            a, b = np.random.randint(1, 10 ** n_digits, size=2)
-            op = np.random.choice(list(math_operators.keys()))
-            res = math_operators[op](a, b)
-            x = "".join([str(elem) for elem in (a, op, b)])
-            if invert is True:
-                x = x[::-1]
-            y = "{:.5f}".format(res) if isinstance(res, float) else str(res)
-            X.append(x)
-            Y.append(y)
-        return X, Y
-
-    n_samples = big_nb_samples if big_dataset else small_nb_samples
-    X, y = math_expressions_generation(n_samples=n_samples, n_digits=3, invert=True)
-    data_processor = DataProcessor(X, y, with_positional_encodings=True)
-    assert data_processor.encoder_input_tr.size(
-        "word_dim"
-    ) == data_processor.decoder_input_tr.size("word_dim")
-    return data_processor
-
-
-if __name__ == "__main__":
-
-    ARGS = handle_arguments()
-    data_processor = get_math_data(big_dataset=not ARGS.quick_debug)
-    transformer = Transformer(
-        data_processor.encoder_input_tr.size("word_dim"),
-        data_processor.vocabulary_size,
-        num_heads=ARGS.num_heads,
-        num_encoders=ARGS.num_encoders,
-        num_decoders=ARGS.num_decoders,
+    positional_encoding[~dimensions_are_even] = np.cos(
+        positional_encoding[~dimensions_are_even]
     )
-    mask_decoder = (
-        decoder_triangular_training_mask(data_processor.decoder_input_tr.size("time"))
-        if ARGS.use_mask
-        else None
+    return positional_encoding
+
+
+def decoder_triangular_training_mask(nb_timesteps):
+    mask = torch.triu(torch.ones(nb_timesteps, nb_timesteps), diagonal=1).type(
+        torch.bool
     )
-    for epoch in range(ARGS.epochs):
-        for (
-            batch_encoder_inputs,
-            batch_decoder_inputs,
-            batch_targets,
-        ) in generate_batches(
-            data_processor.encoder_input_tr,
-            data_processor.decoder_input_tr,
-            data_processor.target_tr,
-            ARGS.batch_size,
-        ):
-            batch_loss = transformer.train_on_batch(
-                batch_encoder_inputs,
-                batch_decoder_inputs,
-                batch_targets,
-                mask_decoder=mask_decoder,
-            )
-            print(f"personal implem loss on batch: {batch_loss} epoch: {epoch}")
+    return mask

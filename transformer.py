@@ -278,32 +278,48 @@ class TrainableTransformer(Transformer):
         # see how change optimizer lr during training
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
-    def forward(
+    def forward(self, input_encoder, input_decoder, mask_decoder=None):
+        z_dec = Transformer.forward(
             self, input_encoder, input_decoder, mask_decoder=None
-    ):
-        z_dec = Transformer.forward(self, input_encoder, input_decoder, mask_decoder=None)
+        )
         return torch.nn.functional.log_softmax(
             self.final_linear(z_dec).refine_names(..., "dec_vocabulary"),
             "dec_vocabulary",
         )
 
     def train_on_batch(
-        self,
-        input_encoder,
-        input_decoder,
-        target,
-        mask_decoder=None,
+        self, batch_input_encoder, batch_input_decoder, batch_target, mask_decoder=None
     ):
         self.optimizer.zero_grad()
         prediction = self(
-            input_encoder,
-            input_decoder,
-            mask_decoder=mask_decoder,
+            batch_input_encoder, batch_input_decoder, mask_decoder=mask_decoder
         )
-        loss_on_batch = self._batched_ce_loss(prediction, target)
+        loss_on_batch = self._batched_ce_loss(prediction, batch_target)
         loss_on_batch.backward()
         self.optimizer.step()
         return loss_on_batch
+
+    def train(self, input_encoder, input_decoder, target, do_target_mask=True, target_mask=None):
+        training_target_mask = TrainableTransformer._handle_target_mask_arg(
+            do_target_mask, target_mask, input_decoder
+        )
+
+
+    @staticmethod
+    def _handle_target_mask_arg(do_target_mask, target_mask, input_decoder):
+        if do_target_mask:
+            if target_mask is None:
+                mask = decoder_triangular_training_mask(input_decoder.size("time"))
+            else:
+                mask = target_mask
+        else:
+            if target_mask is not None:
+                raise Exception(
+                    "target_mask bool arg says no mask but target mask provided"
+                )
+            else:
+                mask = None
+        return mask
 
     def _batched_ce_loss(self, prediction, target, reduction="mean"):
         target = target.align_to("batch", "time", "dec_vocabulary")
@@ -316,9 +332,6 @@ class TrainableTransformer(Transformer):
 
     def validate(self, validation_data, mask_decoder=None):
         input_val, target_val = validation_data
-        prediction_val = self(
-            *input_val,
-            mask_decoder=mask_decoder,
-        )
+        prediction_val = self(*input_val, mask_decoder=mask_decoder)
         loss_on_val = self._batched_ce_loss(prediction_val, target_val)
         return loss_on_val

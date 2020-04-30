@@ -74,12 +74,12 @@ def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=Tru
 def do_inference(transformer, math_expression, sequence_processor):
     # +1 for GO term
     def get_input(idxs_words, for_encoder=True):
-        max_timesteps = (
+        nb_timesteps = (
             sequence_processor.max_encoder_sequence_length
             if for_encoder
-            else sequence_processor.max_decoder_sequence_length
+            else len(idxs_words)
         )
-        input = torch.zeros(1, max_timesteps, sequence_processor.vocabulary_size)
+        input = torch.zeros(1, nb_timesteps, sequence_processor.vocabulary_size)
         input[0, np.arange(len(idxs_words)), idxs_words] = 1
         input = input.refine_names("batch", "time", "word_dim")
         input += sequence_processor.position_encodings[: input.size("time")]
@@ -87,15 +87,9 @@ def do_inference(transformer, math_expression, sequence_processor):
 
     encoder_input_idxs = [sequence_processor.char_index[c] for c in math_expression]
     encoder_input = get_input(encoder_input_idxs, for_encoder=True)
-    # encoder_input[0, np.arange(len(encoder_input_idxs)), encoder_input_idxs] = 1
-    # encoder_input = encoder_input.refine_names("batch", "time", "word_dim")
-    # encoder_input += sequence_processor.position_encodings[: encoder_input.size("time")]
 
     decoder_input_idxs = [sequence_processor.char_index[sequence_processor.GO]]
     decoder_input = get_input(decoder_input_idxs, for_encoder=False)
-    # decoder_input[0, np.arange(len(decoder_input_idxs)), decoder_input_idxs] = 1
-    # decoder_input = decoder_input.refine_names("batch", "time", "word_dim")
-    # decoder_input += sequence_processor.position_encodings[: decoder_input.size("time")]
 
     decoded_expression = []
     for _ in range(sequence_processor.max_decoder_sequence_length - 1):
@@ -108,10 +102,6 @@ def do_inference(transformer, math_expression, sequence_processor):
             break
         decoder_input_idxs.append(int(pred_idx))
         decoder_input = get_input(decoder_input_idxs, for_encoder=False)
-        #decoder_input[0, np.arange(len(decoder_input_idxs)), decoder_input_idxs] = 1
-        #decoder_input = decoder_input.refine_names("batch", "time", "word_dim")
-        #decoder_input += position_encodings[: decoder_input.size("time")]
-
         pred_char = sequence_processor.index_char[pred_idx]
         decoded_expression.append(pred_char)
     return "".join(decoded_expression)
@@ -152,14 +142,18 @@ if __name__ == "__main__":
         )
         print(epoch)
         if (ARGS.do_inference and not ARGS.quick_debug) or (
-            ARGS.quick_debug and ARGS.do_inference and epoch > 200
+            ARGS.quick_debug and ARGS.do_inference and epoch > 150
         ):
             if ARGS.quick_debug:
                 X = sequence_processor.X_tr
                 y = sequence_processor.y_tr
+                enc_input = sequence_processor.encoder_input_tr
+                dec_input = sequence_processor.decoder_input_tr
             else:
-                X = sequence_processor.X_vals
+                X = sequence_processor.X_val
                 y = sequence_processor.y_val
+                enc_input = sequence_processor.encoder_input_val
+                dec_input = sequence_processor.decoder_input_val
             print(os.linesep, "Inferences:")
             for i in range(15):
                 y_pred = do_inference(transformer, X[i], sequence_processor)

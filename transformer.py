@@ -330,7 +330,7 @@ class TrainableTransformer(Transformer):
                 )
                 print(f"loss on batch: {batch_loss} epoch {epoch}")
             if validation_data:
-                self.validate(validation_data, mask_decoder=None)
+                self.validate(validation_data, mask_decoder=training_target_mask)
 
     @staticmethod
     def _handle_target_mask_arg(do_target_mask, target_mask, input_decoder):

@@ -13,6 +13,7 @@ class Transformer(nn.Module):
         dim_feedforward=2048,
     ):
         super(Transformer, self).__init__()
+        self.dim_word = dim_word
         self.encoders = nn.ModuleList(
             [
                 Encoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
@@ -269,3 +270,123 @@ def decoder_triangular_training_mask(nb_timesteps):
         torch.bool
     )
     return mask
+
+
+class TrainableTransformer(Transformer):
+    def __init__(self, decoder_vocabulary_size, lr, *args, **kwargs):
+        super(TrainableTransformer, self).__init__(*args, **kwargs)
+        self.final_linear = nn.Linear(self.dim_word, decoder_vocabulary_size, bias=True)
+        # see how change optimizer lr during training
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+
+    def forward(self, input_encoder, input_decoder, mask_decoder=None):
+        z_dec = Transformer.forward(
+            self, input_encoder, input_decoder, mask_decoder=mask_decoder
+        )
+        return torch.nn.functional.log_softmax(
+            self.final_linear(z_dec).refine_names(..., "dec_vocabulary"),
+            "dec_vocabulary",
+        )
+
+    def train_on_batch(
+        self, batch_input_encoder, batch_input_decoder, batch_target, mask_decoder=None
+    ):
+        self.optimizer.zero_grad()
+        prediction = self(
+            batch_input_encoder, batch_input_decoder, mask_decoder=mask_decoder
+        )
+        loss_on_batch = self._batched_ce_loss(prediction, batch_target)
+        loss_on_batch.backward()
+        self.optimizer.step()
+        return loss_on_batch
+
+    def train(
+        self,
+        encoder_input,
+        decoder_input,
+        target,
+        epochs=1,
+        batch_size=128,
+        do_target_mask=True,
+        target_mask=None,
+        validation_data=None,
+    ):
+        training_target_mask = TrainableTransformer._handle_target_mask_arg(
+            do_target_mask, target_mask, decoder_input
+        )
+        for epoch in range(epochs):
+            for (
+                batch_encoder_inputs,
+                batch_decoder_inputs,
+                batch_targets,
+            ) in TrainableTransformer.generate_batches(
+                encoder_input, decoder_input, target, batch_size
+            ):
+                batch_loss = self.train_on_batch(
+                    batch_encoder_inputs,
+                    batch_decoder_inputs,
+                    batch_targets,
+                    mask_decoder=training_target_mask,
+                )
+                print(f"loss on batch: {batch_loss} epoch {epoch}")
+            if validation_data:
+                self.validate(validation_data, mask_decoder=None)
+
+    @staticmethod
+    def _handle_target_mask_arg(do_target_mask, target_mask, input_decoder):
+        if do_target_mask:
+            if target_mask is None:
+                mask = decoder_triangular_training_mask(input_decoder.size("time"))
+            else:
+                mask = target_mask
+        else:
+            if target_mask is not None:
+                raise Exception(
+                    "target_mask bool arg says no mask but target mask provided"
+                )
+            else:
+                mask = None
+        return mask
+
+    def _batched_ce_loss(self, prediction, target, reduction="mean"):
+        target = target.align_to("batch", "time", "dec_vocabulary")
+        target_idx = target.rename(None).argmax(2).refine_names("batch", "time")
+        batched_ce_loss = nn.NLLLoss(reduction=reduction)(
+            prediction.flatten(["batch", "time"], "batch_time").rename(None),
+            target_idx.flatten(["batch", "time"], "batch_time").rename(None),
+        )
+        return batched_ce_loss
+
+    def validate(self, validation_data, mask_decoder=None):
+        input_val, target_val = validation_data
+        prediction_val = self(*input_val, mask_decoder=mask_decoder)
+        loss_on_val = self._batched_ce_loss(prediction_val, target_val)
+        print(f"validation loss: {loss_on_val}")
+        return loss_on_val
+
+    @staticmethod
+    def generate_batches(encoder_inputs, decoder_inputs, targets, batch_size):
+        assert (
+            encoder_inputs.names[0]
+            == decoder_inputs.names[0]
+            == targets.names[0]
+            == "batch"
+        )
+        samples_idxs = np.arange(encoder_inputs.size("batch"))
+        np.random.shuffle(samples_idxs)
+        nb_batch = encoder_inputs.size("batch") // batch_size
+        # so can keep on calling generator after inner loop has expired all batches
+        for batch_idx in range(nb_batch):
+            batch_idxs = samples_idxs[
+                batch_idx * batch_size : (batch_idx + 1) * batch_size
+            ]
+            batch = (
+                encoder_inputs.rename(None)[batch_idxs].refine_names(
+                    *encoder_inputs.names
+                ),
+                decoder_inputs.rename(None)[batch_idxs].refine_names(
+                    *decoder_inputs.names
+                ),
+                targets.rename(None)[batch_idxs].refine_names(*targets.names),
+            )
+            yield batch

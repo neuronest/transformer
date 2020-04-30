@@ -1,11 +1,12 @@
 import os
 
+import torch
 import numpy as np
 import argparse
 import operator
 
 from sequence_processor import SequenceProcessor
-from transformer import generate_batches, decoder_triangular_training_mask, Transformer
+from transformer import decoder_triangular_training_mask, TrainableTransformer
 
 ARG_PARSER = argparse.ArgumentParser()
 ARGS = None
@@ -68,15 +69,14 @@ def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=Tru
     return data_processor
 
 
-def infer(
-    self,
+def do_inference(
+    transformer,
     math_expression,
     math_expression_target,
     char_to_idx,
     idx_to_char,
     max_encode_len,
     max_decode_len,
-    pytorch_transformer,
     voc_size,
     GO="=",
     EOS="\n",
@@ -97,7 +97,7 @@ def infer(
     ).refine_names("time", "word_dim")
 
     mask_decoder = decoder_triangular_training_mask(dec_input.size("time"))
-    teacher_forcing_preds = self(
+    teacher_forcing_preds = transformer(
         enc_input,
         dec_input,
         pytorch_transformer=pytorch_transformer,
@@ -124,7 +124,7 @@ def infer(
     for _ in range(max_decode_len):
         # see that
         mask_decoder = decoder_triangular_training_mask(decoder_input.size("time"))
-        pred_tensor = self(
+        pred_tensor = transformer(
             encoder_input, decoder_input, pytorch_transformer=pytorch_transformer
         )
         # last timestep
@@ -147,15 +147,13 @@ if __name__ == "__main__":
 
     ARGS = handle_arguments()
     sequence_processor = get_math_data(big_dataset=not ARGS.quick_debug)
-    transformer = Transformer(
-        sequence_processor.encoder_input_tr.size("word_dim"),
+    transformer = TrainableTransformer(
         sequence_processor.vocabulary_size,
+        ARGS.lr,
+        sequence_processor.encoder_input_tr.size("word_dim"),
         num_heads=ARGS.num_heads,
         num_encoders=ARGS.num_encoders,
         num_decoders=ARGS.num_decoders,
-    )
-    mask_decoder = (
-        decoder_triangular_training_mask(sequence_processor.decoder_input_tr.size("time"))
     )
     validation_data = (
         (
@@ -165,84 +163,12 @@ if __name__ == "__main__":
         if ARGS.validate
         else None
     )
-    for epoch in range(ARGS.epochs):
-        for (
-            batch_encoder_inputs,
-            batch_decoder_inputs,
-            batch_targets,
-        ) in generate_batches(
-            sequence_processor.encoder_input_tr,
-            sequence_processor.decoder_input_tr,
-            sequence_processor.target_tr,
-            ARGS.batch_size,
-        ):
-            msg = ""
-            # train alternatively pytorch implementation and our implementation
-            for use_pytorch_transformer in True, False:
-                batch_loss = transformer.train_on_batch(
-                    batch_encoder_inputs,
-                    batch_decoder_inputs,
-                    batch_targets,
-                    mask_decoder=mask_decoder,
-                    pytorch_transformer=use_pytorch_transformer,
-                )
-                if use_pytorch_transformer:
-                    msg += f"pytorch implem loss on batch: {batch_loss}"
-                else:
-                    msg += f" personal implem loss on batch: {batch_loss}"
-            msg += f" epoch: {epoch}"
-            print(msg)
-        if validation_data is not None:
-            msg = ""
-            for use_pytorch_transformer in True, False:
-                loss_val = transformer.validate(
-                    validation_data, use_pytorch_transformer, mask_decoder=None
-                )
-                if use_pytorch_transformer:
-                    msg += f"pytorch implem val loss: {loss_val}"
-                else:
-                    msg += f" personal implem val loss: {loss_val}"
-            print(msg)
-
-        if (ARGS.do_inference and not ARGS.quick_debug) or (
-            ARGS.quick_debug and ARGS.do_inference and batch_loss < 0.1
-        ):
-            if ARGS.quick_debug:
-                X = sequence_processor.X_tr
-                y = sequence_processor.y_tr
-                enc_input = sequence_processor.encoder_input_tr
-                dec_input = sequence_processor.decoder_input_tr
-            else:
-                X = sequence_processor.X_vals
-                y = sequence_processor.y_val
-                enc_input = sequence_processor.encoder_input_val
-                dec_input = sequence_processor.decoder_input_val
-
-            for use_pytorch_transformer in True, False:
-                if use_pytorch_transformer:
-                    print(os.linesep, "Inferences for pytorch implem")
-                else:
-                    print(os.linesep, "Inferences for personal implem")
-                for i in range(10):
-                    y_pred = transformer.infer(
-                        X[i],
-                        y[i].replace(sequence_processor.GO, ""),
-                        sequence_processor.char_index,
-                        sequence_processor.index_char,
-                        sequence_processor.max_encoder_sequence_length,
-                        sequence_processor.max_decoder_sequence_length,
-                        use_pytorch_transformer,
-                        sequence_processor.vocabulary_size,
-                        GO=sequence_processor.GO,
-                        EOS=sequence_processor.EOS,
-                        enc_input=enc_input.rename(None)[i : i + 1].refine_names(
-                            *enc_input.names
-                        ),
-                        dec_input=dec_input.rename(None)[i : i + 1].refine_names(
-                            *dec_input.names
-                        ),
-                    )
-                    print(
-                        f"{X[i]} = {y_pred} predicted / {y[i].replace(sequence_processor.GO, '').replace(sequence_processor.EOS, '')} expected"
-                    )
-                print()
+    transformer.train(
+        sequence_processor.encoder_input_tr,
+        sequence_processor.decoder_input_tr,
+        sequence_processor.target_tr,
+        epochs=ARGS.epochs,
+        batch_size=ARGS.batch_size,
+        do_target_mask=True,
+        validation_data=validation_data,
+    )

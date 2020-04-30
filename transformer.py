@@ -13,6 +13,7 @@ class Transformer(nn.Module):
         dim_feedforward=2048,
     ):
         super(Transformer, self).__init__()
+        self.dim_word = dim_word
         self.encoders = nn.ModuleList(
             [
                 Encoder(dim_word, num_heads=num_heads, dim_feedforward=dim_feedforward)
@@ -280,7 +281,7 @@ class TrainableTransformer(Transformer):
 
     def forward(self, input_encoder, input_decoder, mask_decoder=None):
         z_dec = Transformer.forward(
-            self, input_encoder, input_decoder, mask_decoder=None
+            self, input_encoder, input_decoder, mask_decoder=mask_decoder
         )
         return torch.nn.functional.log_softmax(
             self.final_linear(z_dec).refine_names(..., "dec_vocabulary"),
@@ -311,7 +312,7 @@ class TrainableTransformer(Transformer):
         validation_data=None,
     ):
         training_target_mask = TrainableTransformer._handle_target_mask_arg(
-            do_target_mask, target_mask, encoder_input
+            do_target_mask, target_mask, decoder_input
         )
         for epoch in range(epochs):
             for (
@@ -327,7 +328,7 @@ class TrainableTransformer(Transformer):
                     batch_targets,
                     mask_decoder=training_target_mask,
                 )
-                print(f"loss on batch: {batch_loss}")
+                print(f"loss on batch: {batch_loss} epoch {epoch}")
             if validation_data:
                 self.validate(validation_data, mask_decoder=None)
 

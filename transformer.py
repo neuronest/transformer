@@ -7,7 +7,6 @@ class Transformer(nn.Module):
     def __init__(
         self,
         dim_word,
-        decoder_vocabulary_size,
         num_heads=8,
         num_encoders=6,
         num_decoders=6,
@@ -30,7 +29,6 @@ class Transformer(nn.Module):
         )
         # layer norm after decoders comes from Pytorch implemetation
         self.layer_norm_decoder = NormalizationLayer(dim_word)
-        self.final_linear = nn.Linear(dim_word, decoder_vocabulary_size, bias=True)
 
     def forward(self, input_encoder, input_decoder, mask_decoder=None):
         z_enc = input_encoder

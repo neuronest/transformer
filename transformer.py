@@ -384,6 +384,88 @@ class Transformer(nn.Module):
         )
         return batched_ce_loss
 
+    def validate(self, validation_data, pytorch_transformer, mask_decoder=None):
+        input_val, target_val = validation_data
+        prediction_val = self(
+            *input_val,
+            pytorch_transformer=pytorch_transformer,
+            mask_decoder=mask_decoder,
+        )
+        loss_on_val = self._batched_ce_loss(prediction_val, target_val)
+        return loss_on_val
+
+    def infer(self,
+              math_expression,
+              math_expression_target,
+              char_to_idx,
+              idx_to_char,
+              max_encode_len,
+              max_decode_len,
+              pytorch_transformer,
+              voc_size,
+              GO="=",
+              EOS="\n",
+              enc_input=None,
+              dec_input=None
+    ):
+        target_idxs = [char_to_idx[c] for c in math_expression_target]
+
+        dec_input_idxs = dec_input.rename(None).argmax(2)[0]
+
+        # +1 for GO term
+        position_encodings = torch.tensor(
+            [
+                positional_encoding(t, voc_size)
+                for t in range(max(max_encode_len, max_decode_len) + 1)
+            ],
+            dtype=torch.float32,
+        ).refine_names("time", "word_dim")
+
+        mask_decoder = decoder_triangular_training_mask(dec_input.size("time"))
+        teacher_forcing_preds = self(
+            enc_input,
+            dec_input,
+            pytorch_transformer=pytorch_transformer,
+            mask_decoder=mask_decoder,
+        )
+        teacher_forcing_preds_idxs = teacher_forcing_preds.rename(None).argmax(2)
+        teacher_forcing_preds_chars = [idx_to_char[int(idx)] for idx in teacher_forcing_preds_idxs[0]]
+
+        encoder_input_idxs = [char_to_idx[c] for c in math_expression]
+        encoder_input = torch.zeros(1, max_encode_len, voc_size)
+        encoder_input[0, np.arange(len(encoder_input_idxs)), encoder_input_idxs] = 1
+        encoder_input = encoder_input.refine_names("batch", "time", "word_dim")
+        encoder_input += position_encodings[: encoder_input.size("time")]
+
+        decoder_input_idxs = [char_to_idx[GO]]
+        decoder_input = torch.zeros(1, len(decoder_input_idxs), voc_size)
+        decoder_input[0, np.arange(len(decoder_input_idxs)), decoder_input_idxs] = 1
+        decoder_input = decoder_input.refine_names("batch", "time", "word_dim")
+        decoder_input += position_encodings[: decoder_input.size("time")]
+
+        decoded_expression = []
+        for _ in range(max_decode_len):
+            # see that
+            mask_decoder = decoder_triangular_training_mask(decoder_input.size("time"))
+            pred_tensor = self(encoder_input, decoder_input, pytorch_transformer=pytorch_transformer)
+            # last timestep
+            pred_tensor = pred_tensor.rename(None)[0, -1, :]
+            pred_idx = int(pred_tensor.argmax())
+            if pred_idx == char_to_idx[EOS]:
+                break
+            decoder_input_idxs.append(int(pred_idx))
+            decoder_input = torch.zeros(1, len(decoder_input_idxs), voc_size)
+            decoder_input[0, np.arange(len(decoder_input_idxs)), decoder_input_idxs] = 1
+            decoder_input = decoder_input.refine_names("batch", "time", "word_dim")
+            decoder_input += position_encodings[: decoder_input.size("time")]
+
+            pred_char = idx_to_char[pred_idx]
+            decoded_expression.append(pred_char)
+        return "".join(decoded_expression)
+
+
+
+
 
 def handle_arguments():
     # Debug arguments
@@ -436,6 +518,12 @@ def handle_arguments():
     ARG_PARSER.add_argument("--lr", default=0.01, type=float, help="")
     ARG_PARSER.add_argument("--batch-size", default=128, type=int, help="")
     ARG_PARSER.add_argument("--epochs", default=2000, type=int, help="")
+    ARG_PARSER.add_argument(
+        "--validate", default=True, type=lambda x: str(x).lower() == "true", help=""
+    )
+    ARG_PARSER.add_argument(
+        "--do-inference", default=True, type=lambda x: str(x).lower() == "true", help=""
+    )
 
     return ARG_PARSER.parse_args()
 
@@ -516,6 +604,14 @@ if __name__ == "__main__":
         if ARGS.use_mask
         else None
     )
+    validation_data = (
+        (
+            (data_processor.encoder_input_val, data_processor.decoder_input_val),
+            data_processor.target_val,
+        )
+        if ARGS.validate
+        else None
+    )
     for epoch in range(ARGS.epochs):
         for (
             batch_encoder_inputs,
@@ -541,5 +637,53 @@ if __name__ == "__main__":
                     msg += f"pytorch implem loss on batch: {batch_loss}"
                 else:
                     msg += f" personal implem loss on batch: {batch_loss}"
-                msg += f" epoch: {epoch}"
+            msg += f" epoch: {epoch}"
             print(msg)
+        if validation_data is not None:
+            msg = ""
+            for use_pytorch_transformer in True, False:
+                loss_val = transformer.validate(
+                    validation_data, use_pytorch_transformer, mask_decoder=None
+                )
+                if use_pytorch_transformer:
+                    msg += f"pytorch implem val loss: {loss_val}"
+                else:
+                    msg += f" personal implem val loss: {loss_val}"
+            print(msg)
+
+        if (ARGS.do_inference and not ARGS.quick_debug) or (ARGS.quick_debug and ARGS.do_inference and batch_loss < 0.1):
+            if ARGS.quick_debug:
+                X = data_processor.X_tr
+                y = data_processor.y_tr
+                enc_input = data_processor.encoder_input_tr
+                dec_input = data_processor.decoder_input_tr
+            else:
+                X = data_processor.X_val
+                y = data_processor.y_val
+                enc_input = data_processor.encoder_input_val
+                dec_input = data_processor.decoder_input_val
+
+            for use_pytorch_transformer in True, False:
+                if use_pytorch_transformer:
+                    print(os.linesep, "Inferences for pytorch implem")
+                else:
+                    print(os.linesep, "Inferences for personal implem")
+                for i in range(10):
+                    y_pred = transformer.infer(
+                        X[i],
+                        y[i].replace(data_processor.GO, ''),
+                        data_processor.char_index,
+                        data_processor.index_char,
+                        data_processor.max_encoder_sequence_length,
+                        data_processor.max_decoder_sequence_length,
+                        use_pytorch_transformer,
+                        data_processor.vocabulary_size,
+                        GO=data_processor.GO,
+                        EOS=data_processor.EOS,
+                        enc_input=enc_input.rename(None)[i:i + 1].refine_names(*enc_input.names),
+                        dec_input=dec_input.rename(None)[i:i + 1].refine_names(*dec_input.names)
+                    )
+                    print(
+                        f"{X[i]} = {y_pred} predicted / {y[i].replace(data_processor.GO, '').replace(data_processor.EOS, '')} expected"
+                    )
+                print()

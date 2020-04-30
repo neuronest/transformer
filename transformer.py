@@ -483,12 +483,6 @@ def handle_arguments():
         type=lambda x: str(x).lower() == "true",
         help="",
     )
-    ARG_PARSER.add_argument(
-        "--use-pytorch-dim-per-head",
-        default=True,
-        type=lambda x: str(x).lower() == "true",
-        help="",
-    )
 
     # Transformer architecture arguments
     ARG_PARSER.add_argument("--num-heads", default=2, type=int, help="")

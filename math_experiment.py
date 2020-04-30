@@ -7,36 +7,9 @@ import operator
 
 from sequence_processor import SequenceProcessor
 from transformer import TrainableTransformer
-from transformer import positional_encoding
 
 ARG_PARSER = argparse.ArgumentParser()
 ARGS = None
-
-
-def handle_arguments():
-    # Debug arguments
-    ARG_PARSER.add_argument(
-        "--quick-debug", default=False, type=lambda x: str(x).lower() == "true", help=""
-    )
-    # Transformer architecture arguments
-    ARG_PARSER.add_argument("--num-heads", default=2, type=int, help="")
-    ARG_PARSER.add_argument("--num-encoders", default=1, type=int, help="")
-    ARG_PARSER.add_argument("--num-decoders", default=1, type=int, help="")
-
-    # Training arguments
-    ARG_PARSER.add_argument("--lr", default=0.01, type=float, help="")
-    ARG_PARSER.add_argument("--batch-size", default=128, type=int, help="")
-    ARG_PARSER.add_argument("--epochs", default=2000, type=int, help="")
-    ARG_PARSER.add_argument(
-        "--validate", default=True, type=lambda x: str(x).lower() == "true", help=""
-    )
-
-    # Others
-    ARG_PARSER.add_argument(
-        "--do-inference", default=True, type=lambda x: str(x).lower() == "true", help=""
-    )
-
-    return ARG_PARSER.parse_args()
 
 
 # this code is for toy data generation, will be discarded later
@@ -105,6 +78,32 @@ def do_inference(transformer, math_expression, sequence_processor):
         pred_char = sequence_processor.index_char[pred_idx]
         decoded_expression.append(pred_char)
     return "".join(decoded_expression)
+
+
+def handle_arguments():
+    # Debug arguments
+    ARG_PARSER.add_argument(
+        "--quick-debug", default=False, type=lambda x: str(x).lower() == "true", help=""
+    )
+    # Transformer architecture arguments
+    ARG_PARSER.add_argument("--num-heads", default=2, type=int, help="")
+    ARG_PARSER.add_argument("--num-encoders", default=1, type=int, help="")
+    ARG_PARSER.add_argument("--num-decoders", default=1, type=int, help="")
+
+    # Training arguments
+    ARG_PARSER.add_argument("--lr", default=0.01, type=float, help="")
+    ARG_PARSER.add_argument("--batch-size", default=128, type=int, help="")
+    ARG_PARSER.add_argument("--epochs", default=2000, type=int, help="")
+    ARG_PARSER.add_argument(
+        "--validate", default=True, type=lambda x: str(x).lower() == "true", help=""
+    )
+
+    # Others
+    ARG_PARSER.add_argument(
+        "--do-inference", default=True, type=lambda x: str(x).lower() == "true", help=""
+    )
+
+    return ARG_PARSER.parse_args()
 
 
 if __name__ == "__main__":

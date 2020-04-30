@@ -473,10 +473,7 @@ def handle_arguments():
         "--quick-debug", default=True, type=lambda x: str(x).lower() == "true", help=""
     )
     ARG_PARSER.add_argument(
-        "--use-mask",
-        default=True,
-        type=lambda x: str(x).lower() == "true",
-        help="",
+        "--use-mask", default=True, type=lambda x: str(x).lower() == "true", help=""
     )
     ARG_PARSER.add_argument(
         "--use-pytorch-multi-head",

@@ -334,4 +334,32 @@ class TrainableTransformer(Transformer):
         input_val, target_val = validation_data
         prediction_val = self(*input_val, mask_decoder=mask_decoder)
         loss_on_val = self._batched_ce_loss(prediction_val, target_val)
+        print(f"validation loss: {loss_on_val}")
         return loss_on_val
+
+    @staticmethod
+    def generate_batches(encoder_inputs, decoder_inputs, targets, batch_size):
+        assert (
+            encoder_inputs.names[0]
+            == decoder_inputs.names[0]
+            == targets.names[0]
+            == "batch"
+        )
+        samples_idxs = np.arange(encoder_inputs.size("batch"))
+        np.random.shuffle(samples_idxs)
+        nb_batch = encoder_inputs.size("batch") // batch_size
+        # so can keep on calling generator after inner loop has expired all batches
+        for batch_idx in range(nb_batch):
+            batch_idxs = samples_idxs[
+                batch_idx * batch_size : (batch_idx + 1) * batch_size
+            ]
+            batch = (
+                encoder_inputs.rename(None)[batch_idxs].refine_names(
+                    *encoder_inputs.names
+                ),
+                decoder_inputs.rename(None)[batch_idxs].refine_names(
+                    *decoder_inputs.names
+                ),
+                targets.rename(None)[batch_idxs].refine_names(*targets.names),
+            )
+            yield batch

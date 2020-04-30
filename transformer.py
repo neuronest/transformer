@@ -218,23 +218,12 @@ class Decoder(nn.Module):
             input_decoder, input_decoder, input_decoder, mask=mask
         )
 
-        # z_self_att = self.multi_head_self_att(
-        #    input_query=input_decoder.align_to("time", "batch", "word_dim").rename(None),
-        #    input_key=input_decoder.align_to("time", "batch", "word_dim").rename(None),
-        #    input_value=input_decoder.align_to("time", "batch", "word_dim").rename(None)
-        # ).refine_names("time", "batch", "word_dim").align_to("batch", "time", "word_dim")
-
         z_norm1 = self.norm_layer((z_self_att + input_decoder.align_as(z_self_att)))
 
         # Encoder Decoder attention
         z_enc_dec_att = self.multi_head_enc_dec_att(
             z_norm1, input_seq_encodings, input_seq_encodings
         )
-        # z_enc_dec_att = self.multi_head_enc_dec_att(
-        #    input_query=z_norm1.align_to("time", "batch", "word_dim").rename(None),
-        #    input_key=input_seq_encodings.align_to("time", "batch", "word_dim").rename(None),
-        #    input_value=input_seq_encodings.align_to("time", "batch", "word_dim").rename(None)
-        # ).refine_names("time", "batch", "word_dim").align_to("batch", "time", "word_dim")
         enc_dec_focused_normalized = self.norm_layer2(z_enc_dec_att + z_norm1)
         Z_forwarded = self.ffnn(enc_dec_focused_normalized).refine_names(
             *enc_dec_focused_normalized.names
@@ -280,7 +269,8 @@ class Transformer(nn.Module):
         )
         # self.transformer = nn.Transformer(
         from torch.nn.modules.transformer import Transformer as PytorchTransformer
-        #from pytorch.torch.nn.modules.transformer import Transformer as PytorchTransformer
+
+        # from pytorch.torch.nn.modules.transformer import Transformer as PytorchTransformer
         self.transformer = PytorchTransformer(
             d_model=dim_word,
             nhead=num_heads,
@@ -380,19 +370,20 @@ class Transformer(nn.Module):
         loss_on_val = self._batched_ce_loss(prediction_val, target_val)
         return loss_on_val
 
-    def infer(self,
-              math_expression,
-              math_expression_target,
-              char_to_idx,
-              idx_to_char,
-              max_encode_len,
-              max_decode_len,
-              pytorch_transformer,
-              voc_size,
-              GO="=",
-              EOS="\n",
-              enc_input=None,
-              dec_input=None
+    def infer(
+        self,
+        math_expression,
+        math_expression_target,
+        char_to_idx,
+        idx_to_char,
+        max_encode_len,
+        max_decode_len,
+        pytorch_transformer,
+        voc_size,
+        GO="=",
+        EOS="\n",
+        enc_input=None,
+        dec_input=None,
     ):
         target_idxs = [char_to_idx[c] for c in math_expression_target]
 
@@ -415,7 +406,9 @@ class Transformer(nn.Module):
             mask_decoder=mask_decoder,
         )
         teacher_forcing_preds_idxs = teacher_forcing_preds.rename(None).argmax(2)
-        teacher_forcing_preds_chars = [idx_to_char[int(idx)] for idx in teacher_forcing_preds_idxs[0]]
+        teacher_forcing_preds_chars = [
+            idx_to_char[int(idx)] for idx in teacher_forcing_preds_idxs[0]
+        ]
 
         encoder_input_idxs = [char_to_idx[c] for c in math_expression]
         encoder_input = torch.zeros(1, max_encode_len, voc_size)
@@ -433,7 +426,9 @@ class Transformer(nn.Module):
         for _ in range(max_decode_len):
             # see that
             mask_decoder = decoder_triangular_training_mask(decoder_input.size("time"))
-            pred_tensor = self(encoder_input, decoder_input, pytorch_transformer=pytorch_transformer)
+            pred_tensor = self(
+                encoder_input, decoder_input, pytorch_transformer=pytorch_transformer
+            )
             # last timestep
             pred_tensor = pred_tensor.rename(None)[0, -1, :]
             pred_idx = int(pred_tensor.argmax())
@@ -450,9 +445,6 @@ class Transformer(nn.Module):
         return "".join(decoded_expression)
 
 
-
-
-
 def handle_arguments():
     # Debug arguments
     ARG_PARSER.add_argument(
@@ -460,12 +452,6 @@ def handle_arguments():
     )
     ARG_PARSER.add_argument(
         "--use-mask", default=True, type=lambda x: str(x).lower() == "true", help=""
-    )
-    ARG_PARSER.add_argument(
-        "--use-pytorch-multi-head",
-        default=True,
-        type=lambda x: str(x).lower() == "true",
-        help="",
     )
 
     # Transformer architecture arguments

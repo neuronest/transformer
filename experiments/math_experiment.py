@@ -16,7 +16,7 @@ ARGS = None
 def handle_arguments():
     # Debug arguments
     ARG_PARSER.add_argument(
-        "--quick-debug", default=True, type=lambda x: str(x).lower() == "true", help=""
+        "--quick-debug", default=False, type=lambda x: str(x).lower() == "true", help=""
     )
     # Transformer architecture arguments
     ARG_PARSER.add_argument("--num-heads", default=2, type=int, help="")

@@ -4,7 +4,7 @@ import torch
 from transformer import positional_encoding
 
 
-class DataProcessor:
+class SequenceProcessor:
     def __init__(self, X, y, with_positional_encodings=True):
         self.X = X
         self.y = y

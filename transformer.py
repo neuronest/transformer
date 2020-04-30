@@ -57,22 +57,35 @@ def attention(keys, queries, values, mask=None, temperature=None):
 
 
 class MultiHead(nn.Module):
-    def __init__(self, dim_word, num_heads=8):
+    def __init__(
+        self,
+        dim_word,
+        num_heads=8,
+        dim_key_query_per_head=None,
+        dim_value_per_head=None,
+    ):
         super(MultiHead, self).__init__()
         if not ARGS.use_pytorch_multi_head:
-            assert dim_word // num_heads * num_heads == dim_word
             self.dim_word = dim_word
             self.num_heads = num_heads
             self.dim_repr = (
                 dim_word if ARGS.use_pytorch_dim_per_head else dim_word * num_heads
             )
-            self.d_k = float(self.dim_repr)
-            self.Q = nn.Linear(dim_word, self.dim_repr, bias=True)
-            self.K = nn.Linear(dim_word, self.dim_repr, bias=True)
-            self.V = nn.Linear(dim_word, self.dim_repr, bias=True)
-            self.linear_out = nn.Linear(
-                self.dim_repr, dim_word, bias=True
-            )
+            dim_key_query_all_heads, dim_value_all_heads = self.dim_word, self.dim_word
+            if dim_key_query_per_head is not None:
+                dim_key_query_all_heads = dim_key_query_per_head * num_heads
+            if dim_value_per_head is not None:
+                dim_value_all_heads = dim_value_per_head * num_heads
+
+            assert dim_key_query_all_heads // num_heads * num_heads == dim_key_query_all_heads
+            assert dim_value_all_heads // num_heads * num_heads == dim_value_all_heads
+            # the greater the number of dimensions involved in the dot products
+            # before softmax the more we scalre to flatten the probabilities
+            self.d_k = float(dim_key_query_all_heads)
+            self.Q = nn.Linear(dim_word, dim_key_query_all_heads, bias=True)
+            self.K = nn.Linear(dim_word, dim_key_query_all_heads, bias=True)
+            self.V = nn.Linear(dim_word, dim_value_all_heads, bias=True)
+            self.linear_out = nn.Linear(dim_value_all_heads, dim_word, bias=True)
         else:
             from torch.nn.modules.activation import MultiheadAttention
 

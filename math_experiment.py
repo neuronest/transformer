@@ -8,9 +8,6 @@ import operator
 from sequence_processor import SequenceProcessor
 from transformer import TrainableTransformer
 
-ARG_PARSER = argparse.ArgumentParser()
-ARGS = None
-
 
 # this code is for toy data generation, will be discarded later
 def get_math_data(small_nb_samples=200, big_nb_samples=int(1e5), big_dataset=True):
@@ -82,41 +79,41 @@ def do_inference(transformer, math_expression, sequence_processor):
 
 def handle_arguments():
     # Debug arguments
-    ARG_PARSER.add_argument(
+    arg_parser.add_argument(
         "--quick-debug", default=False, type=lambda x: str(x).lower() == "true", help=""
     )
     # Transformer architecture arguments
-    ARG_PARSER.add_argument("--num-heads", default=2, type=int, help="")
-    ARG_PARSER.add_argument("--num-encoders", default=1, type=int, help="")
-    ARG_PARSER.add_argument("--num-decoders", default=1, type=int, help="")
+    arg_parser.add_argument("--num-heads", default=2, type=int, help="")
+    arg_parser.add_argument("--num-encoders", default=1, type=int, help="")
+    arg_parser.add_argument("--num-decoders", default=1, type=int, help="")
 
     # Training arguments
-    ARG_PARSER.add_argument("--lr", default=0.01, type=float, help="")
-    ARG_PARSER.add_argument("--batch-size", default=128, type=int, help="")
-    ARG_PARSER.add_argument("--epochs", default=2000, type=int, help="")
-    ARG_PARSER.add_argument(
+    arg_parser.add_argument("--lr", default=0.01, type=float, help="")
+    arg_parser.add_argument("--batch-size", default=128, type=int, help="")
+    arg_parser.add_argument("--epochs", default=2000, type=int, help="")
+    arg_parser.add_argument(
         "--validate", default=True, type=lambda x: str(x).lower() == "true", help=""
     )
 
     # Others
-    ARG_PARSER.add_argument(
+    arg_parser.add_argument(
         "--do-inference", default=True, type=lambda x: str(x).lower() == "true", help=""
     )
 
-    return ARG_PARSER.parse_args()
+    return arg_parser.parse_args()
 
 
 if __name__ == "__main__":
 
-    ARGS = handle_arguments()
-    sequence_processor = get_math_data(big_dataset=not ARGS.quick_debug)
+    args = handle_arguments(argparse.ArgumentParser())
+    sequence_processor = get_math_data(big_dataset=not args.quick_debug)
     transformer = TrainableTransformer(
         sequence_processor.vocabulary_size,
-        ARGS.lr,
+        args.lr,
         sequence_processor.encoder_input_tr.size("word_dim"),
-        num_heads=ARGS.num_heads,
-        num_encoders=ARGS.num_encoders,
-        num_decoders=ARGS.num_decoders,
+        num_heads=args.num_heads,
+        num_encoders=args.num_encoders,
+        num_decoders=args.num_decoders,
     )
     validation_data = (
         (
@@ -126,24 +123,24 @@ if __name__ == "__main__":
             ),
             sequence_processor.target_val,
         )
-        if ARGS.validate
+        if args.validate
         else None
     )
-    for epoch in range(ARGS.epochs):
+    for epoch in range(args.epochs):
         transformer.train(
             sequence_processor.encoder_input_tr,
             sequence_processor.decoder_input_tr,
             sequence_processor.target_tr,
             epochs=1,
-            batch_size=ARGS.batch_size,
+            batch_size=args.batch_size,
             do_target_mask=True,
             validation_data=validation_data,
         )
         print(epoch)
-        if (ARGS.do_inference and not ARGS.quick_debug) or (
-            ARGS.quick_debug and ARGS.do_inference and epoch > 150
+        if (args.do_inference and not args.quick_debug) or (
+                args.quick_debug and args.do_inference and epoch > 150
         ):
-            if ARGS.quick_debug:
+            if args.quick_debug:
                 X = sequence_processor.X_tr
                 y = sequence_processor.y_tr
                 enc_input = sequence_processor.encoder_input_tr

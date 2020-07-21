@@ -77,7 +77,7 @@ def do_inference(transformer, math_expression, sequence_processor):
     return "".join(decoded_expression)
 
 
-def handle_arguments():
+def handle_arguments(arg_parser):
     # Debug arguments
     arg_parser.add_argument(
         "--quick-debug", default=False, type=lambda x: str(x).lower() == "true", help=""

@@ -3,7 +3,7 @@
 This is a PyTorch implementation of the Transformer architecture described
 in the paper [Attention Is All You Need](https://arxiv.org/abs/1706.03762).
 
-The implemented architecture is intended specifically for tackling the Sequence to Sequence
+The implemented architecture is intended specifically for tackling Sequence to Sequence
 tasks. 
 
 To improve the readability of matrix products inside the Transformer architecture, 

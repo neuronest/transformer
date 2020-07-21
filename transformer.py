@@ -348,6 +348,7 @@ class TrainableTransformer(Transformer):
                 mask = None
         return mask
 
+
     def _batched_ce_loss(self, prediction, target, reduction="mean"):
         target = target.align_to("batch", "time", "dec_vocabulary")
         target_idx = target.rename(None).argmax(2).refine_names("batch", "time")
